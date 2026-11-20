@@ -1,0 +1,9 @@
+name = "soc-ia-worker"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "soc-ia-db"
+database_id = "fca69b52-699c-4a57-a116-1039e548af16"

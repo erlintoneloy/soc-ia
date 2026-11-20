@@ -1,0 +1,17 @@
+# Dependencias de Node
+node_modules/
+
+# Configuración local de Wrangler y base de datos
+.wrangler/
+.wrangler-v2/
+.dev.vars
+
+# Logs y archivos de sistema
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Archivos de entorno
+.env
+.env.local
