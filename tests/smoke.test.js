@@ -993,6 +993,112 @@ describe('SOC-IA smoke test', () => {
     assert.equal(limpieza.status, 200);
   });
 
+  it('expone la auditoría solo para administradores', async () => {
+    const noAdmin = await api('/api/auditoria');
+    assert.equal(noAdmin.status, 403);
+
+    const adminCookie = await loginComo(CREDENCIALES.admin.email, CREDENCIALES.admin.password);
+    const { status, json } = await api('/api/auditoria?limit=100', {
+      cookie: adminCookie,
+      guardarCookie: false,
+    });
+
+    assert.equal(status, 200);
+    const acciones = json.data.auditoria.map((fila) => fila.accion);
+    assert.ok(acciones.includes('login'), 'El login debe auditarse');
+    assert.ok(acciones.includes('triage'), 'El triage debe auditarse');
+    assert.ok(acciones.includes('reset'), 'El reset debe auditarse');
+  });
+
+  it('crea un token de simulación, ataca el banco y lo revoca', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
+    const bancoAdmin = await loginComo(CREDENCIALES.bancoAdmin.email, CREDENCIALES.bancoAdmin.password);
+    const hospitalAdmin = await loginComo(CREDENCIALES.admin.email, CREDENCIALES.admin.password);
+
+    await api('/api/demo/reset', { method: 'POST', cookie: bancoAdmin, guardarCookie: false });
+
+    const nombre = `consola-${RUN_ID}`;
+    const creado = await api('/api/admin/tokens', {
+      method: 'POST',
+      cookie: bancoAdmin,
+      guardarCookie: false,
+      body: JSON.stringify({ nombre }),
+    });
+
+    assert.equal(creado.status, 200);
+    const token = creado.json.data.token;
+    assert.ok(token.startsWith('socsim_'), 'El token debe tener el prefijo socsim_');
+
+    const listado = await api('/api/admin/tokens', { cookie: bancoAdmin, guardarCookie: false });
+    assert.ok(listado.json.data.tokens.some((item) => item.id === creado.json.data.id));
+    assert.ok(!Object.prototype.hasOwnProperty.call(listado.json.data.tokens[0], 'hash'));
+
+    const preflight = await fetch(`${BASE_URL}/api/simulate`, { method: 'OPTIONS' });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+
+    const base = {
+      fuente: 'identidad',
+      tipo_evento: 'login_fallido',
+      usuario: 'cajero.01',
+      host: 'WS-CAJA-05',
+      destino_ip: '10.30.20.5',
+      ip_origen: '198.51.100.91',
+    };
+
+    const simulacion = await fetch(`${BASE_URL}/api/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ logs: Array.from({ length: 6 }, () => base) }),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    });
+
+    assert.equal(simulacion.status, 200);
+    const jsonSimulacion = await simulacion.json();
+    assert.equal(jsonSimulacion.data.casos_creados, 1);
+
+    const invalido = await fetch(`${BASE_URL}/api/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer socsim_invalido' },
+      body: JSON.stringify({ logs: [base] }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    assert.equal(invalido.status, 401);
+
+    const auditBanco = await api('/api/auditoria?limit=100', {
+      cookie: bancoAdmin,
+      guardarCookie: false,
+    });
+    const accionesBanco = auditBanco.json.data.auditoria.map((fila) => fila.accion);
+    assert.ok(accionesBanco.includes('token_creado'));
+    assert.ok(accionesBanco.includes('simulacion'));
+
+    const auditHospital = await api('/api/auditoria?limit=100', {
+      cookie: hospitalAdmin,
+      guardarCookie: false,
+    });
+    assert.ok(
+      !auditHospital.json.data.auditoria.some((fila) => fila.detalle?.token === nombre),
+      'El hospital no debe ver la simulación del banco'
+    );
+
+    const revocado = await api(`/api/admin/tokens/${creado.json.data.id}`, {
+      method: 'DELETE',
+      cookie: bancoAdmin,
+      guardarCookie: false,
+    });
+    assert.equal(revocado.status, 200);
+
+    const revocadoUso = await fetch(`${BASE_URL}/api/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ logs: [base] }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    assert.equal(revocadoUso.status, 401);
+
+    await api('/api/demo/reset', { method: 'POST', cookie: bancoAdmin, guardarCookie: false });
+  });
+
   it('invalida la sesión al cerrar sesión', async () => {
     const salida = await api('/api/auth/logout', { method: 'POST' });
     assert.equal(salida.status, 200);

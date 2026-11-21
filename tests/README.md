@@ -20,7 +20,8 @@ agentes, la salud inicial y los usuarios de demo. Es idempotente (`INSERT OR IGN
 > `npm run db:migrate:activos`. Para el directorio de usuarios:
 > `npm run db:migrate:usuarios`. Para los logs de la Fase 4:
 > `npm run db:migrate:logs`. Para multi-tenant:
-> `npm run db:migrate:tenant`.
+> `npm run db:migrate:tenant`. Para auditoría y tokens:
+> `npm run db:migrate:auditoria`.
 
 ## 2. Levantar el Worker
 
@@ -94,6 +95,8 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Cursor incremental de logs | `GET /api/logs` |
 | El reset borra los logs | `POST /api/demo/reset` |
 | Aislamiento de casos y logs entre tenants | `GET /api/dashboard` + `PATCH` |
+| Auditoría solo para administradores | `GET /api/auditoria` |
+| Token de simulación, ataque y revocación | `POST /api/admin/tokens` + `/api/simulate` |
 | Filtros por fuente y resultado | `GET /api/logs?sentido=desc` |
 | Filtros por host, usuario y texto libre | `GET /api/logs` |
 | Paginación hacia atrás sin solaparse | `GET /api/logs?before=` |
@@ -136,6 +139,13 @@ evitar que datos de corridas anteriores rompan las aserciones.
 | `ERROR_INTERNO` | 500 | Fallo no controlado |
 
 Las rutas que no son de API sirven `frontend/404.html` como página de error.
+
+### Simulación con token
+
+`POST /api/simulate` permite que una app externa envíe logs con
+`Authorization: Bearer socsim_...`. El token es por tenant, solo de ingesta,
+revocable y con rate limit de 30/min. Se crea con `POST /api/admin/tokens`
+(admin). El contrato completo está en `docs/ATTACK_CONSOLE.md`.
 
 ## 5. Pruebas unitarias del motor
 
