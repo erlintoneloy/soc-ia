@@ -45,7 +45,8 @@ npm run dev                   # dashboard + API en http://127.0.0.1:8787
 Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
-npm run test:smoke     # 32 pruebas end-to-end (incluye autenticación)
+npm run test:unit      # 7 pruebas del motor, sin Worker
+npm run test:smoke     # 34 pruebas end-to-end (incluye autenticación)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
@@ -68,6 +69,22 @@ npm run sim -- --scenario mixto --logs 20 --rate 10
 - **Deduplicación:** un mismo ataque (`fuente + tipo_evento + IP/usuario/host`) no crea otro caso durante 60 segundos. Se acumula en `ocurrencias` y la tarjeta muestra `×N`.
 - **Tope de IA:** máximo 3 inferencias por lote. El resto de los casos se crea igual, pero con resumen de respaldo, marcado como `respaldo` en la UI.
 - **Reset de demo:** botón visible solo para `admin` (o `POST /api/demo/reset`), que borra los casos, reinicia contadores y deja la salud en 100%.
+
+## Detección con ventanas reales
+
+El motor no confía en el campo `intentos` del cliente: cuenta eventos persistidos en `logs` por ventana de 60 s.
+
+| Regla | Ventana | Disparo |
+|---|---|---|
+| Fuerza bruta | 60 s por usuario | 6 o más `login_fallido` |
+| Auto-bloqueo de red | 60 s por IP de origen | más de 100 `request_normal` |
+| Escaneo de puertos | inmediato | 1 evento |
+| PowerShell ofuscado | inmediato | 1 evento |
+
+- Los primeros 5 fallos de login quedan como `observado`; el sexto escala y los siguientes se deduplican contra el caso activo.
+- Más de 100 requests del mismo origen se marcan como `bloqueado` (auto-contenido por el Agente de Red, sin intervención humana).
+- Resultados por log: `escalado`, `observado`, `bloqueado`, `descartado` y `duplicado`.
+- El motor está aislado en `worker/src/engine.js` (funciones puras) y tiene pruebas unitarias sin Worker.
 
 ## Contexto de activos
 
@@ -129,6 +146,9 @@ npm run deploy           # assets + API en un solo Worker
 
 El proyecto completo está configurado en `wrangler.jsonc` (`main`, `assets`, D1 y AI).
 El código del Worker vive en `worker/` y el frontend en `frontend/`.
+
+La integración continua (`.github/workflows/ci.yml`) corre las pruebas unitarias del
+motor y el chequeo de sintaxis en cada push a `main` y en cada pull request.
 
 Smoke test contra producción:
 

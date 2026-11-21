@@ -91,3 +91,16 @@
 *   **Consecuencias:**
     *   Pros: se puede investigar sin tocar la CLI; el CSV sirve como evidencia; la consola en vivo queda intacta; todo sigue detrás de sesión.
     *   Contras: los filtros de texto usan `LIKE` sin índice dedicado (aceptable con 24 h de retención); la exportación está acotada a 1.000 filas; no hay una vista de "detalle del log" con el payload completo (el campo existe en la base, pero la tabla no lo muestra).
+
+## ADR-08: Detección stateful con ventanas de 60 s
+*   **Fecha:** 2026-11-21
+*   **Contexto:** La regla de fuerza bruta confiaba en `log.intentos`, un campo que envía el cliente: bastaba con mandar un log con `intentos: 15` para escalar. El escaneo escalaba con un solo evento y el Agente de Red no auto-bloqueaba nada. Además, el motor vivía dentro de `index.js` y no se podía testear sin levantar el Worker.
+*   **Decisión:**
+    *   Extraer las reglas puras a `worker/src/engine.js` (eventos, prioridad, deduplicación, umbrales).
+    *   Contar eventos persistidos en `logs` en una ventana de 60 s, con una única consulta agrupada por usuario/IP al inicio de cada lote.
+    *   Umbrales: **6 fallos** del mismo usuario (el sexto escala, los cinco previos quedan `observado`) y **101 requests** del mismo origen (la 101 se auto-bloquea como `bloqueado`).
+    *   Agregar los resultados `observado` y `bloqueado` al modelo, la API, la consola y el explorador.
+    *   Cubrir el motor con pruebas unitarias (`node:test`) y un workflow de GitHub Actions.
+*   **Consecuencias:**
+    *   Pros: la detección ya no depende de datos del cliente; el flood se contiene solo; el motor es testeable sin Worker; CI detecta regresiones en cada push/PR.
+    *   Contras: una consulta extra por lote para las ventanas; si el insert de logs falla, la ventana queda corta; los umbrales son constantes y no configurables por entorno; la ventana usa el timestamp de ingesta, no un reloj deslizante exacto.
