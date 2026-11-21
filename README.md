@@ -22,9 +22,9 @@ La sesión se guarda en una cookie `HttpOnly`, por lo que no hay CORS.
 | Admin | `admin@soc-ia.demo` | `********` |
 
 > Las contraseñas de las cuentas de demo se comparten fuera del repositorio y
-> se cargan en `.env` (ignorado por git). Copiá `.env.example` a `.env` y
-> completá los valores. Son cuentas de demostración sin datos reales; no deben
-> usarse en producción.
+> se cargan en `tests/.env` (ignorado por git). Copiá `tests/.env.example` a
+> `tests/.env` y completá los valores. Son cuentas de demostración sin datos
+> reales; no deben usarse en producción.
 
 ## Stack
 
@@ -37,7 +37,7 @@ La sesión se guarda en una cookie `HttpOnly`, por lo que no hay CORS.
 
 ```powershell
 npm install
-Copy-Item .env.example .env   # completar SOC_IA_PASSWORD y SOC_IA_ADMIN_PASSWORD
+Copy-Item tests/.env.example tests/.env   # completar SOC_IA_PASSWORD y SOC_IA_ADMIN_PASSWORD
 npm run db:init               # schema + seed en la D1 local
 npm run dev                   # dashboard + API en http://127.0.0.1:8787
 ```

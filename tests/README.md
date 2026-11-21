@@ -33,7 +33,7 @@ Un solo proceso sirve el dashboard y la API en `http://127.0.0.1:8787`.
 
 ## 3. Credenciales de demo
 
-Las contraseñas no se versionan. Copiá `.env.example` a `.env` y completá:
+Las contraseñas no se versionan. Copiá `tests/.env.example` a `tests/.env` y completá:
 
 ```dotenv
 SOC_IA_PASSWORD=
@@ -41,7 +41,10 @@ SOC_IA_ADMIN_PASSWORD=
 ```
 
 `npm run test:smoke` y `npm run sim` cargan ese archivo con
-`--env-file-if-exists=.env`. Las cuentas son:
+`--env-file-if-exists=tests/.env`. Se mantiene fuera de la raíz para que
+`wrangler dev` no lo inyecte como variables del Worker.
+
+Las cuentas son:
 
 | Rol | Email |
 |---|---|
