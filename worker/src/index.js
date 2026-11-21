@@ -563,34 +563,138 @@ async function manejarStream(request, env, usuario) {
   });
 }
 
+const FUENTES_VALIDAS = new Set(Object.keys(AGENTE_POR_FUENTE));
+const RESULTADOS_VALIDOS = new Set(['escalado', 'descartado', 'duplicado']);
+const COLUMNAS_LOGS =
+  'rowid AS seq, timestamp, fuente, tipo_evento, host, destino_ip, ip_origen, usuario, resultado, activo_id';
+
 async function manejarLogs(env, url) {
-  const afterRaw = Number(url.searchParams.get('after') ?? 0);
-  const after = Number.isFinite(afterRaw) && afterRaw > 0 ? Math.floor(afterRaw) : 0;
+  const params = url.searchParams;
+  const fuente = (params.get('fuente') || '').trim();
+  const resultado = (params.get('resultado') || '').trim();
+  const host = (params.get('host') || '').trim().slice(0, 120);
+  const usuario = (params.get('usuario') || '').trim().slice(0, 120);
+  const q = (params.get('q') || '').trim().slice(0, 120);
+  const desde = (params.get('desde') || '').trim().slice(0, 40);
+  const hasta = (params.get('hasta') || '').trim().slice(0, 40);
+  const sentido = params.get('sentido') === 'desc' ? 'desc' : 'asc';
+  const esCsv = params.get('format') === 'csv';
 
-  const limiteRaw = Number(url.searchParams.get('limit') ?? 50);
-  const limite = Math.min(100, Math.max(1, Number.isFinite(limiteRaw) ? Math.floor(limiteRaw) : 50));
-  const columnas = `rowid AS seq, timestamp, fuente, tipo_evento, host, destino_ip, ip_origen, usuario, resultado, activo_id`;
+  if (fuente && !FUENTES_VALIDAS.has(fuente)) {
+    return error(400, 'fuente inválida', 'VALIDACION');
+  }
+  if (resultado && !RESULTADOS_VALIDOS.has(resultado)) {
+    return error(400, 'resultado inválido', 'VALIDACION');
+  }
 
-  const { results } =
-    after > 0
-      ? await env.DB.prepare(
-          `SELECT ${columnas} FROM logs WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`
-        )
-          .bind(after, limite)
-          .all()
-      : await env.DB.prepare(
-          `SELECT * FROM (SELECT ${columnas} FROM logs ORDER BY rowid DESC LIMIT ?) ORDER BY seq ASC`
-        )
-          .bind(limite)
-          .all();
+  const after = Math.max(0, Math.floor(Number(params.get('after')) || 0));
+  const before = Math.max(0, Math.floor(Number(params.get('before')) || 0));
+  const limitRaw = Number(params.get('limit'));
+  const limite = esCsv
+    ? 1000
+    : Math.min(100, Math.max(1, Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50));
 
+  const condiciones = [];
+  const valores = [];
+
+  if (fuente) {
+    condiciones.push('fuente = ?');
+    valores.push(fuente);
+  }
+  if (resultado) {
+    condiciones.push('resultado = ?');
+    valores.push(resultado);
+  }
+  if (host) {
+    condiciones.push('lower(host) LIKE ?');
+    valores.push(`%${host.toLowerCase()}%`);
+  }
+  if (usuario) {
+    condiciones.push('lower(usuario) LIKE ?');
+    valores.push(`%${usuario.toLowerCase()}%`);
+  }
+  if (q) {
+    const patron = `%${q.toLowerCase()}%`;
+    condiciones.push(
+      '(lower(tipo_evento) LIKE ? OR lower(host) LIKE ? OR lower(usuario) LIKE ? OR lower(ip_origen) LIKE ? OR lower(destino_ip) LIKE ?)'
+    );
+    valores.push(patron, patron, patron, patron, patron);
+  }
+  if (desde) {
+    condiciones.push('timestamp >= ?');
+    valores.push(desde);
+  }
+  if (hasta) {
+    condiciones.push('timestamp <= ?');
+    valores.push(hasta);
+  }
+
+  const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+
+  if (esCsv) {
+    const { results } = await env.DB.prepare(
+      `SELECT ${COLUMNAS_LOGS} FROM logs ${where} ORDER BY rowid DESC LIMIT ?`
+    )
+      .bind(...valores, 1000)
+      .all();
+
+    const cabecera = [
+      'seq',
+      'timestamp',
+      'fuente',
+      'tipo_evento',
+      'host',
+      'destino_ip',
+      'ip_origen',
+      'usuario',
+      'resultado',
+      'activo_id',
+    ];
+    const escapar = (valor) => `"${String(valor ?? '').replace(/"/g, '""')}"`;
+    const lineas = [
+      cabecera.join(','),
+      ...results.map((fila) => cabecera.map((columna) => escapar(fila[columna])).join(',')),
+    ];
+
+    return new Response(lineas.join('\n'), {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="soc-ia-logs.csv"',
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
+  let consulta;
+
+  if (sentido === 'desc') {
+    if (before > 0) {
+      condiciones.push('rowid < ?');
+      valores.push(before);
+    }
+    consulta = `SELECT ${COLUMNAS_LOGS} FROM logs ${condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : ''} ORDER BY rowid DESC LIMIT ?`;
+    valores.push(limite);
+  } else if (after > 0) {
+    condiciones.push('rowid > ?');
+    valores.push(after);
+    consulta = `SELECT ${COLUMNAS_LOGS} FROM logs ${condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : ''} ORDER BY rowid ASC LIMIT ?`;
+    valores.push(limite);
+  } else {
+    consulta = `SELECT * FROM (SELECT ${COLUMNAS_LOGS} FROM logs ${where} ORDER BY rowid DESC LIMIT ?) ORDER BY seq ASC`;
+    valores.push(limite);
+  }
+
+  const { results } = await env.DB.prepare(consulta).bind(...valores).all();
   const logs = results.map((fila) => ({ ...fila, seq: Number(fila.seq) }));
+  const seqs = logs.map((fila) => fila.seq);
 
   return json({
     ok: true,
     data: {
       logs,
-      siguiente: logs.length ? logs[logs.length - 1].seq : after,
+      siguiente: seqs.length ? Math.max(...seqs) : after,
+      anterior: sentido === 'desc' && logs.length === limite ? Math.min(...seqs) : null,
+      total: logs.length,
     },
   });
 }
