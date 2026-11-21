@@ -53,3 +53,16 @@
 *   **Consecuencias:**
     *   Pros: los casos tienen impacto de negocio y evidencia; la prioridad permite triage real; las recomendaciones de la IA son específicas; el dedupe distingue por activo.
     *   Contras: una consulta extra por host nuevo en cada lote (mitigada con caché); el inventario es estático y hay que mantenerlo; los logs sin `host` ni `destino_ip` quedan como desconocidos. La prioridad no afecta la salud, así que un activo crítico con severidad alta puede dejar la barra en verde aunque sea P1: es una decisión consciente para preservar CA4.
+
+## ADR-05: Directorio de usuarios de negocio
+*   **Fecha:** 2026-11-21
+*   **Contexto:** Los casos mostraban un identificador (`jefe.finanzas`) sin nombre, rol ni área. El analista no sabía a quién afectaba el incidente, y la IA recomendaba sobre un usuario anónimo. Además, el botón de simulación del frontend seguía enviando el payload viejo, sin host ni usuario, y generaba casos con "activo desconocido" y solo la IP.
+*   **Decisión:**
+    *   Crear `usuarios_negocio` (username, nombre, rol, área, activo asignado, email) con 9 usuarios ficticios coherentes con el inventario.
+    *   Enlazar los casos por `usuario_afectado` y devolver `usuario_perfil` en el dashboard.
+    *   Mostrar `👤 Nombre (Rol)` en la tarjeta, con el email como tooltip, y usar el perfil en el prompt de la IA.
+    *   Actualizar el lote de demostración del frontend para apuntar a activos y usuarios reales del inventario.
+    *   Hacer que el smoke test reinicie la demo al inicio para partir de un estado limpio.
+*   **Consecuencias:**
+    *   Pros: el caso cuenta a quién afecta y con qué rol; las recomendaciones de la IA son más humanas; la demo web y la de consola producen el mismo contexto; los tests dejan de depender de datos residuales.
+    *   Contras: los usuarios son ficticios y estáticos; un username fuera del directorio se muestra sin perfil; el reset inicial del suite borra los casos existentes (aceptable para pruebas y demo, no para producción real).

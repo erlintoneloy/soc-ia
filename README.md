@@ -77,6 +77,12 @@ El inventario simula una organización ficticia (**Clínica Valle Verde**): 18 a
 - Si no hay coincidencia en el inventario, el caso se marca como **activo desconocido**.
 - La prioridad combina severidad y criticidad del activo: **P1** (≥12), **P2** (≥6), **P3** (<6). Es independiente de la salud, que sigue la fórmula del SPEC.
 
+### Usuarios de negocio
+
+El seed incluye **9 usuarios ficticios** (`jefe.finanzas`, `bioq.lab`, `admin.ti`, etc.) con nombre, rol, área y equipo asignado. Cada caso se enlaza por `usuario_afectado` y la API devuelve `usuario_perfil`.
+
+La tarjeta muestra `👤 Juan Pérez (Jefe de Finanzas)`, y el prompt de la IA recibe ese perfil para contextualizar la recomendación. Un usuario fuera del directorio se muestra con su identificador y sin perfil.
+
 ## Despliegue
 
 ```powershell
