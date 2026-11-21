@@ -19,7 +19,8 @@ agentes, la salud inicial y los usuarios de demo. Es idempotente (`INSERT OR IGN
 > aplicá `npm run db:migrate` una sola vez. Para el inventario de activos:
 > `npm run db:migrate:activos`. Para el directorio de usuarios:
 > `npm run db:migrate:usuarios`. Para los logs de la Fase 4:
-> `npm run db:migrate:logs`.
+> `npm run db:migrate:logs`. Para multi-tenant:
+> `npm run db:migrate:tenant`.
 
 ## 2. Levantar el Worker
 
@@ -41,6 +42,8 @@ Las contraseñas no se versionan. Copiá `tests/.env.example` a `tests/.env` y c
 ```dotenv
 SOC_IA_PASSWORD=
 SOC_IA_ADMIN_PASSWORD=
+SOC_IA_PASSWORD_BANCO=
+SOC_IA_ADMIN_PASSWORD_BANCO=
 ```
 
 `npm run test:smoke` y `npm run sim` cargan ese archivo con
@@ -51,8 +54,10 @@ Las cuentas son:
 
 | Rol | Email |
 |---|---|
-| Analista | `analista@soc-ia.demo` |
-| Admin | `admin@soc-ia.demo` |
+| Analista (hospital) | `analista@soc-ia.demo` |
+| Admin (hospital) | `admin@soc-ia.demo` |
+| Analista (banco) | `analista@banco-litoral.demo` |
+| Admin (banco) | `admin@banco-litoral.demo` |
 
 ## 4. Smoke test
 
@@ -88,6 +93,7 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Persistencia del log con su resultado | `POST /api/stream` + `GET /api/logs` |
 | Cursor incremental de logs | `GET /api/logs` |
 | El reset borra los logs | `POST /api/demo/reset` |
+| Aislamiento de casos y logs entre tenants | `GET /api/dashboard` + `PATCH` |
 | Filtros por fuente y resultado | `GET /api/logs?sentido=desc` |
 | Filtros por host, usuario y texto libre | `GET /api/logs` |
 | Paginación hacia atrás sin solaparse | `GET /api/logs?before=` |

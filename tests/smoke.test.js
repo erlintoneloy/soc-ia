@@ -24,6 +24,11 @@ const AI_TIMEOUT_MS = 30000;
 const CREDENCIALES = {
   analista: { email: 'analista@soc-ia.demo', password: process.env.SOC_IA_PASSWORD || '' },
   admin: { email: 'admin@soc-ia.demo', password: process.env.SOC_IA_ADMIN_PASSWORD || '' },
+  banco: { email: 'analista@banco-litoral.demo', password: process.env.SOC_IA_PASSWORD_BANCO || '' },
+  bancoAdmin: {
+    email: 'admin@banco-litoral.demo',
+    password: process.env.SOC_IA_ADMIN_PASSWORD_BANCO || '',
+  },
 };
 
 // IP de origen única por corrida para que el dedupe no choque entre ejecuciones.
@@ -165,10 +170,16 @@ describe('SOC-IA smoke test', () => {
     assert.equal(health.status, 200, 'GET /api/health debe responder HTTP 200');
     assert.equal(health.json.ok, true, 'GET /api/health debe responder ok:true');
 
-    if (!CREDENCIALES.analista.password || !CREDENCIALES.admin.password) {
+    if (
+      !CREDENCIALES.analista.password ||
+      !CREDENCIALES.admin.password ||
+      !CREDENCIALES.banco.password ||
+      !CREDENCIALES.bancoAdmin.password
+    ) {
       throw new Error(
-        'Faltan SOC_IA_PASSWORD y/o SOC_IA_ADMIN_PASSWORD.\n' +
-          'Copiá tests/.env.example a tests/.env y completá las credenciales de demo antes de correr el suite.'
+        'Faltan credenciales de demo en tests/.env.\n' +
+          'Copiá tests/.env.example a tests/.env y completá SOC_IA_PASSWORD, SOC_IA_ADMIN_PASSWORD, ' +
+          'SOC_IA_PASSWORD_BANCO y SOC_IA_ADMIN_PASSWORD_BANCO.'
       );
     }
 
@@ -247,11 +258,14 @@ describe('SOC-IA smoke test', () => {
     assert.equal(json.ok, true);
     assert.equal(json.data.usuario.email, 'analista@soc-ia.demo');
     assert.equal(json.data.usuario.rol, 'analista');
+    assert.equal(json.data.usuario.tenant_id, 'clinica-valle-verde');
+    assert.equal(json.data.usuario.tenant_nombre, 'Clínica Valle Verde');
     assert.ok(cookie.startsWith('soc_sid='), 'El login debe setear la cookie de sesión');
 
     const me = await api('/api/auth/me');
     assert.equal(me.status, 200);
     assert.equal(me.json.data.usuario.email, 'analista@soc-ia.demo');
+    assert.equal(me.json.data.usuario.tenant_id, 'clinica-valle-verde');
   });
 
   it('bloquea tras 5 intentos fallidos', { timeout: 60000 }, async () => {
@@ -897,6 +911,86 @@ describe('SOC-IA smoke test', () => {
 
     const logs = await logsDesde(0);
     assert.equal(logs.length, 0, 'El reset debe borrar los logs');
+  });
+
+  it('aísla los datos entre tenants', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
+    const cookieBanco = await loginComo(CREDENCIALES.banco.email, CREDENCIALES.banco.password);
+    const cookieBancoAdmin = await loginComo(
+      CREDENCIALES.bancoAdmin.email,
+      CREDENCIALES.bancoAdmin.password
+    );
+
+    const resetBanco = await api('/api/demo/reset', {
+      method: 'POST',
+      cookie: cookieBancoAdmin,
+      guardarCookie: false,
+    });
+    assert.equal(resetBanco.status, 200);
+
+    const base = {
+      fuente: 'identidad',
+      tipo_evento: 'login_fallido',
+      usuario: 'cajero.01',
+      host: 'WS-CAJA-05',
+      destino_ip: '10.30.20.5',
+      ip_origen: '198.51.100.90',
+    };
+
+    const stream = await api('/api/stream', {
+      method: 'POST',
+      timeout: AI_TIMEOUT_MS,
+      cookie: cookieBanco,
+      guardarCookie: false,
+      body: JSON.stringify({ logs: Array.from({ length: 6 }, () => base) }),
+    });
+
+    assert.equal(stream.status, 200);
+    assert.equal(stream.json.data.casos_creados, 1);
+
+    const bancoDash = await api('/api/dashboard', { cookie: cookieBanco, guardarCookie: false });
+    assert.equal(bancoDash.status, 200);
+    const casoBanco = bancoDash.json.data.casos_activos.find(
+      (caso) => caso.activo?.hostname === 'WS-CAJA-05'
+    );
+
+    assert.ok(casoBanco, 'El banco debe ver su propio caso');
+    assert.equal(casoBanco.usuario_perfil.nombre, 'Pablo Ruiz');
+    assert.equal(bancoDash.json.data.agentes.length, 3);
+
+    const hospitalDash = await dashboard();
+    assert.ok(
+      !hospitalDash.casos_activos.some((caso) => caso.id === casoBanco.id),
+      'El hospital no debe ver el caso del banco'
+    );
+
+    const patch = await api(`/api/cases/${casoBanco.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ estado: 'contenido' }),
+    });
+    assert.equal(patch.status, 404, 'El hospital no puede modificar un caso del banco');
+
+    const bancoLogs = await api('/api/logs?sentido=desc&limit=20', {
+      cookie: cookieBanco,
+      guardarCookie: false,
+    });
+    assert.ok(bancoLogs.json.data.logs.length >= 6);
+    assert.ok(
+      bancoLogs.json.data.logs.every((log) => log.host === 'WS-CAJA-05'),
+      'El banco solo debe ver sus logs'
+    );
+
+    const hospitalLogs = await api('/api/logs?sentido=desc&limit=50');
+    assert.ok(
+      !hospitalLogs.json.data.logs.some((log) => log.host === 'WS-CAJA-05'),
+      'El hospital no debe ver los logs del banco'
+    );
+
+    const limpieza = await api('/api/demo/reset', {
+      method: 'POST',
+      cookie: cookieBancoAdmin,
+      guardarCookie: false,
+    });
+    assert.equal(limpieza.status, 200);
   });
 
   it('invalida la sesión al cerrar sesión', async () => {
