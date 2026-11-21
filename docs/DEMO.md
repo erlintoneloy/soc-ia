@@ -46,7 +46,8 @@ Duración estimada: **6-8 minutos**. Dos organizaciones ficticias: **Clínica Va
 ## 4. Contención (1 min)
 
 1. **Aprobar Contención** del caso de PowerShell.
-2. La salud sube y el agente vuelve a `activo`.
+2. Confirmar la acción en el modal (el humano tiene la última palabra).
+3. La salud sube y el agente vuelve a `activo`.
 
 > "Human-in-the-loop: la acción destructiva siempre la confirma el analista."
 
@@ -77,13 +78,18 @@ Duración estimada: **6-8 minutos**. Dos organizaciones ficticias: **Clínica Va
 
 ## 7. Cierre (30 s)
 
+- Abrir **Auditoría** como admin y mostrar el login, el triage y el reset.
 - Reset de demo con el admin de cada tenant.
 - Puntos para cerrar:
   - Reglas deterministas + ventanas de 60 s.
   - IA solo para explicar y recomendar, con fallback marcado.
-  - Human-in-the-loop.
+  - Human-in-the-loop con confirmación y auditoría.
   - Autenticación por sesión, rate limit y multi-tenant.
   - Tests unitarios + smoke end-to-end.
+
+> **Extensión:** si está disponible la consola externa de ataque, se puede lanzar un escenario con
+> un token de simulación mientras el SOC reacciona en la otra pantalla. Ver
+> [`ATTACK_CONSOLE.md`](ATTACK_CONSOLE.md).
 
 ## Contingencias
 

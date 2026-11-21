@@ -48,7 +48,7 @@ Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
 npm run test:unit      # 7 pruebas del motor, sin Worker
-npm run test:smoke     # 35 pruebas end-to-end (incluye autenticación y multi-tenant)
+npm run test:smoke     # 37 pruebas end-to-end (incluye autenticación, tenants y tokens)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
@@ -115,6 +115,16 @@ Los agentes y la salud también son por tenant, y el chip del topbar muestra la 
 
 Cada tenant tiene su propio admin, que solo puede reiniciar su organización.
 
+## Auditoría y simulación externa
+
+- Cada **login, logout, triage, reset** y creación/revocación de token se registra en `auditoria`
+  con tenant, usuario, rol, acción, detalle e IP.
+- El admin ve el panel **Auditoría** en la barra superior (`GET /api/auditoria`, solo admin).
+- La contención se confirma en un modal antes de ejecutarse: el humano tiene la última palabra.
+- **Tokens de simulación por tenant** (`socsim_...`, guardados hasheados y revocables) habilitan
+  `POST /api/simulate` para una consola de ataque externa, con CORS y rate limit propio.
+  Contrato completo en [`docs/ATTACK_CONSOLE.md`](docs/ATTACK_CONSOLE.md).
+
 ## Logs y consola en vivo
 
 Cada log ingerido se persiste en D1 con su resultado: `escalado`, `descartado` o `duplicado`.
@@ -178,4 +188,5 @@ npm run test:smoke
 - [`docs/SPEC.md`](docs/SPEC.md) — modelo de datos, contratos y reglas.
 - [`docs/ADR.md`](docs/ADR.md) — decisiones de arquitectura.
 - [`docs/DEMO.md`](docs/DEMO.md) — guion de demo paso a paso.
+- [`docs/ATTACK_CONSOLE.md`](docs/ATTACK_CONSOLE.md) — integración de la consola de ataque.
 - [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) — estándares de trabajo.

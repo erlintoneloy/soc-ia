@@ -118,3 +118,16 @@
 *   **Consecuencias:**
     *   Pros: aislamiento real de datos, agentes y salud; el mismo despliegue sirve a varias organizaciones; los tests verifican que un tenant no ve ni modifica casos ajenos.
     *   Contras: cada consulta debe recordar el filtro por tenant (riesgo de olvido al agregar features); no hay un superadmin global; la migración reconstruye cuatro tablas; `rate_limit` e `intentos_login` siguen siendo globales por usuario/IP, no por tenant; sigue siendo una sola base D1 (no hay aislamiento físico).
+
+## ADR-10: Auditoría de acciones y tokens de simulación
+*   **Fecha:** 2026-11-21
+*   **Contexto:** Las acciones del analista (login, triage, reset) no dejaban rastro, y la consola de ataque externa necesitaba autenticarse sin compartir la cookie de un analista. Además, la contención se ejecutaba con un solo clic, sin confirmación.
+*   **Decisión:**
+    *   Crear `auditoria` (tenant, usuario, rol, acción, detalle, IP) y registrar login, logout, triage, reset, creación/revocación de tokens y simulaciones.
+    *   Exponer `GET /api/auditoria` solo para admin y un panel **Auditoría** en la barra superior.
+    *   Confirmar la contención (y el falso positivo) en un modal antes de ejecutar el `PATCH`.
+    *   Crear `tokens_simulacion` por tenant: token `socsim_...`, hash SHA-256, revocable, solo ingesta.
+    *   Habilitar `POST /api/simulate` con `Authorization: Bearer`, CORS para el origen de la consola y rate limit por token.
+*   **Consecuencias:**
+    *   Pros: trazabilidad de las acciones humanas; la consola externa no reutiliza credenciales de analista; el token es revocable y de mínimo privilegio; la auditoría no se borra con el reset.
+    *   Contras: la auditoría es *best-effort* (un fallo al escribir no rompe la acción); `auditoria` crece sin retención automática; los tokens no tienen scopes granulares (solo ingesta) ni rotación automática; CORS `*` en `/api/simulate` (el token es la protección); el panel de auditoría no pagina más de 200 filas.
