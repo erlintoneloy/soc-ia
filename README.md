@@ -45,7 +45,7 @@ npm run dev                   # dashboard + API en http://127.0.0.1:8787
 Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
-npm run test:smoke     # 27 pruebas end-to-end (incluye autenticación)
+npm run test:smoke     # 32 pruebas end-to-end (incluye autenticación)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
@@ -93,6 +93,27 @@ Cada log ingerido se persiste en D1 con su resultado: `escalado`, `descartado` o
 - `GET /api/logs` exige sesión.
 
 > Se eligió polling con cursor en lugar de SSE porque no requiere Durable Objects ni conexiones largas. La latencia máxima es de 1,5 s, suficiente para la demo; SSE/DO queda como mejora futura.
+
+### Explorador de logs
+
+El botón **🔎 Historial** abre un explorador con filtros sobre las últimas 24 h:
+
+- Fuente, resultado, host, usuario, texto libre y rango de fechas.
+- Tabla ordenada de más reciente a más antiguo, con paginación hacia atrás.
+- Exportación **CSV** de hasta 1.000 filas con los filtros aplicados.
+
+Parámetros de `GET /api/logs`:
+
+| Parámetro | Uso |
+|---|---|
+| `after` | Cursor incremental para la consola en vivo |
+| `before` | Cursor para páginas anteriores del historial |
+| `sentido=desc` | Ordena de más reciente a más antiguo |
+| `fuente`, `resultado` | Filtros exactos (`red`, `identidad`, `endpoint`; `escalado`, `descartado`, `duplicado`) |
+| `host`, `usuario` | Búsqueda parcial, sin distinguir mayúsculas |
+| `q` | Texto libre en evento, host, usuario e IPs |
+| `desde`, `hasta` | Rango ISO-8601 |
+| `format=csv` | Exporta el resultado filtrado |
 
 ## Despliegue
 

@@ -79,3 +79,15 @@
 *   **Consecuencias:**
     *   Pros: la lluvia es real y compartida; el historial sobrevive a un refresh; el resultado de cada log se ve en color; no requiere Durable Objects ni conexiones largas; el costo es una consulta liviana por cliente cada 1,5 s.
     *   Contras: no es push real, la latencia puede llegar a 1,5 s; con muchos clientes aumenta el número de lecturas a D1; los logs viejos se borran a las 24 h. SSE con Durable Objects queda como mejora si se necesita tiempo real estricto.
+
+## ADR-07: Explorador de logs con filtros y exportación
+*   **Fecha:** 2026-11-21
+*   **Contexto:** La consola en vivo solo mostraba los eventos recientes (últimos 50 al entrar, 200 en el DOM). No había forma de buscar un host, un usuario o un rango horario, ni de sacar evidencia del sistema sin consultar la base a mano.
+*   **Decisión:**
+    *   Extender `GET /api/logs` con filtros (`fuente`, `resultado`, `host`, `usuario`, `q`, `desde`, `hasta`), modo `sentido=desc` y cursor `before` para páginas anteriores.
+    *   Agregar `format=csv` con hasta 1.000 filas y los filtros aplicados.
+    *   Implementar un modal "Explorador de logs" con formulario de filtros, tabla paginada y exportación.
+    *   Validar `fuente` y `resultado` en el backend (400 ante valores inválidos).
+*   **Consecuencias:**
+    *   Pros: se puede investigar sin tocar la CLI; el CSV sirve como evidencia; la consola en vivo queda intacta; todo sigue detrás de sesión.
+    *   Contras: los filtros de texto usan `LIKE` sin índice dedicado (aceptable con 24 h de retención); la exportación está acotada a 1.000 filas; no hay una vista de "detalle del log" con el payload completo (el campo existe en la base, pero la tabla no lo muestra).
