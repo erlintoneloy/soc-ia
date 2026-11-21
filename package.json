@@ -15,7 +15,9 @@
     "db:migrate": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0002-fase2.sql",
     "db:migrate:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0002-fase2.sql",
     "db:migrate:activos": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0003-activos.sql",
-    "db:migrate:activos:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0003-activos.sql"
+    "db:migrate:activos:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0003-activos.sql",
+    "db:migrate:usuarios": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0004-usuarios-negocio.sql",
+    "db:migrate:usuarios:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0004-usuarios-negocio.sql"
   },
   "devDependencies": {
     "wrangler": "^4.166.0"

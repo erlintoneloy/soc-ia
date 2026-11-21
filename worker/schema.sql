@@ -25,6 +25,16 @@ CREATE TABLE IF NOT EXISTS activos (
     creado_en TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS usuarios_negocio (
+    username TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    rol TEXT,
+    area TEXT,
+    activo_asignado TEXT,
+    email TEXT,
+    creado_en TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS casos (
     id TEXT PRIMARY KEY,
     titulo TEXT NOT NULL,

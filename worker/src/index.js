@@ -278,8 +278,7 @@ function calcularPrioridad(severidad, criticidad) {
   return 'P3';
 }
 
-async function resolverActivo(env, log, cache) {
-  const host = typeof log.host === 'string' ? log.host.trim() : '';
+async function resolverActivo(env, log, cache) {  const host = typeof log.host === 'string' ? log.host.trim() : '';
   const destino = typeof log.destino_ip === 'string' ? log.destino_ip.trim() : '';
   if (!host && !destino) return null;
 
@@ -304,6 +303,22 @@ async function resolverActivo(env, log, cache) {
 
   cache.set(clave, activo);
   return activo;
+}
+
+async function resolverUsuario(env, username, cache) {
+  if (!username) return null;
+
+  const clave = String(username).toLowerCase();
+  if (cache.has(clave)) return cache.get(clave);
+
+  const fila = await env.DB.prepare(
+    `SELECT username, nombre, rol, area, email FROM usuarios_negocio WHERE lower(username) = lower(?) LIMIT 1`
+  )
+    .bind(username)
+    .first();
+
+  cache.set(clave, fila);
+  return fila;
 }
 
 function construirEvidencia(log) {
@@ -353,6 +368,7 @@ async function manejarStream(request, env, usuario) {
   const casos = [];
   const casosPorClave = new Map();
   const cacheActivos = new Map();
+  const cacheUsuarios = new Map();
   const creadoEn = new Date().toISOString();
   let descartados = 0;
   let duplicados = 0;
@@ -403,10 +419,16 @@ async function manejarStream(request, env, usuario) {
     }
 
     const activo = await resolverActivo(env, log, cacheActivos);
+    const perfil = await resolverUsuario(env, log.usuario, cacheUsuarios);
+    const usuarioTexto = perfil
+      ? `${perfil.nombre} (${perfil.rol || perfil.area || 'usuario'})`
+      : log.usuario || 'no informado';
+    const areaUsuario = perfil?.area ? `, área ${perfil.area}` : '';
+
     const contexto = activo
       ? `Activo ${activo.hostname} (${activo.tipo}, área ${activo.departamento}, servicio ${activo.servicio}, criticidad ${activo.criticidad}, SO ${activo.sistema_operativo}). ` +
-        `Usuario afectado: ${log.usuario || 'no informado'}. Origen: ${log.ip_origen || log.ip || 'desconocido'}.`
-      : `Activo no identificado. Usuario afectado: ${log.usuario || 'no informado'}. ` +
+        `Usuario afectado: ${usuarioTexto}${areaUsuario}. Origen: ${log.ip_origen || log.ip || 'desconocido'}.`
+      : `Activo no identificado. Usuario afectado: ${usuarioTexto}${areaUsuario}. ` +
         `Origen: ${log.ip_origen || log.ip || 'desconocido'}.`;
 
     let resumen;
@@ -525,9 +547,14 @@ async function manejarDashboard(env) {
             a.responsable AS activo_responsable,
             a.servicio AS activo_servicio,
             a.criticidad AS activo_criticidad,
-            a.sistema_operativo AS activo_so
+            a.sistema_operativo AS activo_so,
+            un.nombre AS usuario_nombre,
+            un.rol AS usuario_rol,
+            un.area AS usuario_area,
+            un.email AS usuario_email
        FROM casos c
        LEFT JOIN activos a ON a.id = c.activo_id
+       LEFT JOIN usuarios_negocio un ON lower(un.username) = lower(c.usuario_afectado)
       WHERE c.estado IN ${ESTADOS_ACTIVOS}
       ORDER BY c.creado_en DESC
       LIMIT 100`
@@ -543,6 +570,10 @@ async function manejarDashboard(env) {
       activo_servicio,
       activo_criticidad,
       activo_so,
+      usuario_nombre,
+      usuario_rol,
+      usuario_area,
+      usuario_email,
       ...caso
     } = fila;
 
@@ -560,9 +591,20 @@ async function manejarDashboard(env) {
         }
       : null;
 
+    const usuario_perfil = usuario_nombre
+      ? {
+          username: caso.usuario_afectado,
+          nombre: usuario_nombre,
+          rol: usuario_rol,
+          area: usuario_area,
+          email: usuario_email,
+        }
+      : null;
+
     return {
       ...caso,
       activo,
+      usuario_perfil,
       prioridad: calcularPrioridad(caso.severidad, activo?.criticidad ?? CRITICIDAD_POR_DEFECTO),
     };
   });

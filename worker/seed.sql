@@ -41,3 +41,17 @@ VALUES
 ('a-ws-far-02', 'WS-FAR-02', '10.20.60.2', 'workstation', 'Farmacia', 'farmacia.turno', 'Dispensación', 'alta', 'Windows 10', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 ('a-ws-rrhh-04', 'WS-RRHH-04', '10.20.70.4', 'workstation', 'RRHH', 'rrhh.01', 'Legajos', 'media', 'Windows 11', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
 ('a-lap-dir-01', 'LAP-DIR-01', '10.20.90.1', 'workstation', 'Dirección', 'direccion', 'Dirección', 'alta', 'Windows 11', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+-- Usuarios de negocio (ficticios) para dar contexto a los casos.
+INSERT OR IGNORE INTO usuarios_negocio
+(username, nombre, rol, area, activo_asignado, email, creado_en)
+VALUES
+('jefe.finanzas', 'Juan Pérez', 'Jefe de Finanzas', 'Facturación', 'WS-FAC-05', 'juan.perez@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('guardia.turno', 'Carla Ríos', 'Médica de Guardia', 'Guardia', 'WS-GUARDIA-03', 'carla.rios@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('bioq.lab', 'Martín Gómez', 'Bioquímico', 'Laboratorio', 'WS-LAB-07', 'martin.gomez@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('tecnico.img', 'Lucía Fernández', 'Técnica en Imágenes', 'Imágenes', 'WS-IMG-02', 'lucia.fernandez@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('admision.01', 'Sofía Álvarez', 'Agente de Admisión', 'Admisión', 'WS-ADM-11', 'sofia.alvarez@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('farmacia.turno', 'Diego Sosa', 'Farmacéutico', 'Farmacia', 'WS-FAR-02', 'diego.sosa@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('rrhh.01', 'Valentina López', 'Analista de RRHH', 'RRHH', 'WS-RRHH-04', 'valentina.lopez@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('admin.ti', 'Nicolás Herrera', 'Administrador de Sistemas', 'TI', 'SRV-AD-01', 'nicolas.herrera@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+('direccion', 'Patricia Molina', 'Directora Médica', 'Dirección', 'LAP-DIR-01', 'patricia.molina@valleverde.demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
