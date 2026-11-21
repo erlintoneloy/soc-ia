@@ -35,8 +35,11 @@ Un solo proceso sirve el dashboard y la API en `http://127.0.0.1:8787`.
 
 | Rol | Email | Contraseña |
 |---|---|---|
-| Analista | `analista@soc-ia.demo` | `SocIA2026!` |
-| Admin | `admin@soc-ia.demo` | `AdminSocIA2026!` |
+| Analista | `analista@soc-ia.demo` | `********` |
+| Admin | `admin@soc-ia.demo` | `********` |
+
+> Las contraseñas no se publican en el repositorio. Se comparten fuera del
+> canal público; son cuentas de demostración.
 
 ## 4. Smoke test
 

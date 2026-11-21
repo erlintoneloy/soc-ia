@@ -18,10 +18,11 @@ La sesión se guarda en una cookie `HttpOnly`, por lo que no hay CORS.
 
 | Rol | Email | Contraseña |
 |---|---|---|
-| Analista | `analista@soc-ia.demo` | `SocIA2026!` |
-| Admin | `admin@soc-ia.demo` | `AdminSocIA2026!` |
+| Analista | `analista@soc-ia.demo` | `********` |
+| Admin | `admin@soc-ia.demo` | `********` |
 
-> Cambiar estas credenciales en un entorno real. Se siembran desde `worker/seed.sql`.
+> Las contraseñas de las cuentas de demo se comparten fuera del repositorio.
+> Son cuentas de demostración sin datos reales; no deben usarse en producción.
 
 ## Stack
 
