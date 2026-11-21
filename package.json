@@ -1,0 +1,13 @@
+{
+  "name": "soc-ia",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SOC-IA: simulador de logs y smoke tests end-to-end",
+  "type": "commonjs",
+  "scripts": {
+    "sim": "node tests/simulator.js",
+    "test:smoke": "node --test tests/",
+    "db:reset": "node -e \"require('node:fs').rmSync('worker/.wrangler/state', { recursive: true, force: true })\"",
+    "db:init": "npm --prefix worker exec -- wrangler d1 execute soc-ia-db --local --file=schema.sql && npm --prefix worker exec -- wrangler d1 execute soc-ia-db --local --file=seed.sql"
+  }
+}
