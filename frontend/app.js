@@ -126,6 +126,7 @@ async function entrarApp(usuario) {
   document.getElementById('login-screen').hidden = true;
   document.getElementById('app-shell').hidden = false;
   document.getElementById('user-chip').innerHTML = `<b>${escapeHtml(usuario.nombre)}</b> · ${escapeHtml(usuario.rol)}`;
+  document.getElementById('btn-reset').hidden = usuario.rol !== 'admin';
 
   mostrarErrorLogin('');
   marcarConexion(true);
@@ -172,6 +173,28 @@ document.getElementById('login-form').addEventListener('submit', async (evento) 
     await entrarApp(json.data.usuario);
   } catch (fallo) {
     mostrarErrorLogin(fallo.message);
+  } finally {
+    boton.disabled = false;
+  }
+});
+
+document.getElementById('btn-reset').addEventListener('click', async (evento) => {
+  const confirmado = window.confirm(
+    'Esto borra todos los casos y reinicia las métricas del SOC. ¿Querés continuar?'
+  );
+  if (!confirmado) return;
+
+  const boton = evento.currentTarget;
+  boton.disabled = true;
+
+  try {
+    const json = await pedirJSON('/demo/reset', { method: 'POST' });
+    document.getElementById('logs-console').innerHTML =
+      '<div class="log-line system">> Demo reiniciada. Esperando conexión...</div>';
+    mostrarAviso(`Demo reiniciada: ${json.data.casos_eliminados} casos eliminados.`, 'success');
+    await cargarDashboard();
+  } catch (fallo) {
+    mostrarAviso(`No se pudo reiniciar la demo: ${fallo.message}`);
   } finally {
     boton.disabled = false;
   }
@@ -281,11 +304,15 @@ function actualizarCasos(casos) {
         <div class="case-card ${caso.severidad === 'critica' ? 'critico' : ''}">
             <div class="case-header">
                 <span class="case-title">${escapeHtml(caso.titulo)}</span>
-                <span class="badge ${escapeHtml(caso.severidad)}">${escapeHtml(caso.severidad).toUpperCase()}</span>
+                <span class="case-meta">
+                    ${Number(caso.ocurrencias) > 1 ? `<span class="case-repeats" title="Repeticiones del mismo ataque">×${Number(caso.ocurrencias)}</span>` : ''}
+                    <span class="badge ${escapeHtml(caso.severidad)}">${escapeHtml(caso.severidad).toUpperCase()}</span>
+                </span>
             </div>
             <div class="case-agent">Agente: ${escapeHtml(caso.agente_responsable)}</div>
             <div class="case-ia">
-                <strong>🤖 IA:</strong> ${escapeHtml(caso.resumen_ia || 'Analizando...')}<br>
+                <strong>🤖 IA:</strong> ${escapeHtml(caso.resumen_ia || 'Analizando...')}
+                ${caso.resumen_fuente === 'fallback' ? '<span class="case-tag">respaldo</span>' : ''}<br>
                 <strong>💡 Recomendación:</strong> ${escapeHtml(caso.recomendacion_ia || 'Pendiente')}
             </div>
             <div class="case-actions">
@@ -352,8 +379,11 @@ document.getElementById('btn-simulate').addEventListener('click', async (evento)
         body: JSON.stringify({ logs: LOTE_DEMO }),
       });
 
-      const { procesados, escalados, descartados } = json.data;
-      mostrarAviso(`Lote enviado: ${procesados} procesados, ${escalados} escalados, ${descartados} filtrados.`, 'success');
+      const { procesados, casos_creados, duplicados, descartados } = json.data;
+      mostrarAviso(
+        `Lote enviado: ${procesados} procesados, ${casos_creados} casos nuevos, ${duplicados} duplicados, ${descartados} filtrados.`,
+        'success'
+      );
       await cargarDashboard();
     } catch (fallo) {
       mostrarAviso(`La simulación falló: ${fallo.message}`);
