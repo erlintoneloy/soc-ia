@@ -140,10 +140,15 @@ async function generarResumenIA(env, { titulo, agente, severidad, log, contexto 
   }
 }
 
-async function recalcularSalud(env, logsPorSegundo = null) {
+async function recalcularSalud(env, tenantId, logsPorSegundo = null) {
   const { results } = await env.DB.prepare(
-    `SELECT severidad, COUNT(*) AS total FROM casos WHERE estado IN ${ESTADOS_ACTIVOS} GROUP BY severidad`
-  ).all();
+    `SELECT severidad, COUNT(*) AS total
+       FROM casos
+      WHERE tenant_id = ? AND estado IN ${ESTADOS_ACTIVOS}
+      GROUP BY severidad`
+  )
+    .bind(tenantId)
+    .all();
 
   const totales = Object.fromEntries(results.map((fila) => [fila.severidad, fila.total]));
   const criticos = totales.critica ?? 0;
@@ -154,23 +159,26 @@ async function recalcularSalud(env, logsPorSegundo = null) {
 
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO sistema_salud (id, salud_porcentaje, amenazas_activas, logs_por_segundo, actualizado_en)
-       VALUES (1, 100, 0, 0, ?)`
-    ).bind(ahora),
+      `INSERT OR IGNORE INTO sistema_salud (tenant_id, salud_porcentaje, amenazas_activas, logs_por_segundo, actualizado_en)
+       VALUES (?, 100, 0, 0, ?)`
+    ).bind(tenantId, ahora),
     env.DB.prepare(
       `UPDATE sistema_salud
           SET salud_porcentaje = ?, amenazas_activas = ?, logs_por_segundo = COALESCE(?, logs_por_segundo), actualizado_en = ?
-        WHERE id = 1`
-    ).bind(salud, amenazas, logsPorSegundo, ahora),
+        WHERE tenant_id = ?`
+    ).bind(salud, amenazas, logsPorSegundo, ahora, tenantId),
     env.DB.prepare(
       `UPDATE agentes_estado
           SET estado = CASE
             WHEN nombre IN (
-              SELECT REPLACE(agente_responsable, 'Agente ', '') FROM casos WHERE estado IN ${ESTADOS_ACTIVOS}
+              SELECT REPLACE(agente_responsable, 'Agente ', '')
+                FROM casos
+               WHERE tenant_id = ? AND estado IN ${ESTADOS_ACTIVOS}
             ) THEN 'alerta'
             ELSE 'activo'
-          END`
-    ),
+          END
+        WHERE tenant_id = ?`
+    ).bind(tenantId, tenantId),
   ]);
 
   return salud;
@@ -179,12 +187,13 @@ async function recalcularSalud(env, logsPorSegundo = null) {
 async function insertarCasos(env, casos) {
   const sentencias = casos.map((caso) =>
     env.DB.prepare(
-      `INSERT INTO casos (id, titulo, severidad, agente_responsable, resumen_ia, recomendacion_ia,
+      `INSERT INTO casos (id, tenant_id, titulo, severidad, agente_responsable, resumen_ia, recomendacion_ia,
                           estado, creado_en, clave_dedupe, ocurrencias, ultima_ocurrencia, resumen_fuente,
                           activo_id, tipo_evento, ip_origen, usuario_afectado, evidencia_json)
-       VALUES (?, ?, ?, ?, ?, ?, 'escalado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'escalado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       caso.id,
+      caso.tenant_id,
       caso.titulo,
       caso.severidad,
       caso.agente,
@@ -297,9 +306,10 @@ function construirEvidencia(log) {
   return JSON.stringify(evidencia).slice(0, 500);
 }
 
-function nuevaFilaLog(log, resultado, activoId, timestamp) {
+function nuevaFilaLog(log, resultado, activoId, timestamp, tenantId) {
   return {
     id: crypto.randomUUID(),
+    tenant_id: tenantId,
     timestamp,
     fuente: log.fuente,
     tipo_evento: log.tipo_evento,
@@ -314,6 +324,8 @@ function nuevaFilaLog(log, resultado, activoId, timestamp) {
 }
 
 async function manejarStream(request, env, usuario) {
+  const tenantId = usuario.tenant_id;
+
   const limite = await consumirLimite(env, `stream|${usuario.id}`, MAX_STREAM_POR_MINUTO, 60 * 1000);
   if (!limite.permitido) {
     return error(429, 'Demasiadas peticiones. Esperá un minuto antes de reintentar.', 'DEMASIADAS_PETICIONES');
@@ -365,11 +377,11 @@ async function manejarStream(request, env, usuario) {
     const { results } = await env.DB.prepare(
       `SELECT lower(usuario) AS clave, COUNT(*) AS total
          FROM logs
-        WHERE fuente = 'identidad' AND tipo_evento = 'login_fallido'
+        WHERE tenant_id = ? AND fuente = 'identidad' AND tipo_evento = 'login_fallido'
           AND timestamp >= ? AND lower(usuario) IN (${marcas})
         GROUP BY lower(usuario)`
     )
-      .bind(ventanaDesde, ...lista)
+      .bind(tenantId, ventanaDesde, ...lista)
       .all();
 
     for (const fila of results) previosPorUsuario.set(fila.clave, Number(fila.total) || 0);
@@ -382,11 +394,11 @@ async function manejarStream(request, env, usuario) {
     const { results } = await env.DB.prepare(
       `SELECT ip_origen AS clave, COUNT(*) AS total
          FROM logs
-        WHERE fuente = 'red' AND tipo_evento = 'request_normal'
+        WHERE tenant_id = ? AND fuente = 'red' AND tipo_evento = 'request_normal'
           AND timestamp >= ? AND ip_origen IN (${marcas})
         GROUP BY ip_origen`
     )
-      .bind(ventanaDesde, ...lista)
+      .bind(tenantId, ventanaDesde, ...lista)
       .all();
 
     for (const fila of results) previosPorIp.set(fila.clave, Number(fila.total) || 0);
@@ -436,7 +448,7 @@ async function manejarStream(request, env, usuario) {
       if (resultado === 'bloqueado') bloqueados++;
       else descartados++;
 
-      filasLog.push(nuevaFilaLog(log, resultado, null, creadoEn));
+      filasLog.push(nuevaFilaLog(log, resultado, null, creadoEn, tenantId));
       continue;
     }
 
@@ -449,7 +461,7 @@ async function manejarStream(request, env, usuario) {
       if (!superaUmbral(previosPorUsuario.get(usuario) || 0, lote, UMBRAL_FUERZA_BRUTA)) {
         contador.bloqueados++;
         observados++;
-        filasLog.push(nuevaFilaLog(log, 'observado', null, creadoEn));
+        filasLog.push(nuevaFilaLog(log, 'observado', null, creadoEn, tenantId));
         continue;
       }
     }
@@ -462,18 +474,18 @@ async function manejarStream(request, env, usuario) {
     if (enLote) {
       enLote.ocurrencias += 1;
       duplicados++;
-      filasLog.push(nuevaFilaLog(log, 'duplicado', null, creadoEn));
+      filasLog.push(nuevaFilaLog(log, 'duplicado', null, creadoEn, tenantId));
       continue;
     }
 
     // Duplicado de un caso activo reciente: se acumula en la ocurrencia existente.
     const previo = await env.DB.prepare(
       `SELECT id FROM casos
-        WHERE clave_dedupe = ? AND estado IN ${ESTADOS_ACTIVOS}
+        WHERE tenant_id = ? AND clave_dedupe = ? AND estado IN ${ESTADOS_ACTIVOS}
           AND COALESCE(ultima_ocurrencia, creado_en) >= ?
         LIMIT 1`
     )
-      .bind(clave, new Date(Date.now() - COOLDOWN_DEDUPE_MS).toISOString())
+      .bind(tenantId, clave, new Date(Date.now() - COOLDOWN_DEDUPE_MS).toISOString())
       .first();
 
     if (previo) {
@@ -484,7 +496,7 @@ async function manejarStream(request, env, usuario) {
         .run();
 
       duplicados++;
-      filasLog.push(nuevaFilaLog(log, 'duplicado', null, creadoEn));
+      filasLog.push(nuevaFilaLog(log, 'duplicado', null, creadoEn, tenantId));
       continue;
     }
 
@@ -523,6 +535,7 @@ async function manejarStream(request, env, usuario) {
 
     const caso = {
       id: crypto.randomUUID(),
+      tenant_id: tenantId,
       titulo: deteccion.titulo,
       severidad: deteccion.severidad,
       agente: `Agente ${agente}`,
@@ -542,15 +555,15 @@ async function manejarStream(request, env, usuario) {
 
     casos.push(caso);
     casosPorClave.set(clave, caso);
-    filasLog.push(nuevaFilaLog(log, 'escalado', activo?.id ?? null, creadoEn));
+    filasLog.push(nuevaFilaLog(log, 'escalado', activo?.id ?? null, creadoEn, tenantId));
   }
 
   // Asegura las filas de agentes y aplica el delta acumulado en una sola transacción.
   const sentencias = Object.values(AGENTE_POR_FUENTE).map((agente) =>
     env.DB.prepare(
-      `INSERT OR IGNORE INTO agentes_estado (id, nombre, logs_procesados, logs_bloqueados, casos_escalados, estado)
-       VALUES (?, ?, 0, 0, 0, 'activo')`
-    ).bind(`agente-${agente.toLowerCase()}`, agente)
+      `INSERT OR IGNORE INTO agentes_estado (id, tenant_id, nombre, logs_procesados, logs_bloqueados, casos_escalados, estado)
+       VALUES (?, ?, ?, 0, 0, 0, 'activo')`
+    ).bind(`agente-${tenantId}-${agente.toLowerCase()}`, tenantId, agente)
   );
 
   for (const [agente, contador] of contadores) {
@@ -560,19 +573,20 @@ async function manejarStream(request, env, usuario) {
             SET logs_procesados = logs_procesados + ?,
                 logs_bloqueados = logs_bloqueados + ?,
                 casos_escalados = casos_escalados + ?
-          WHERE nombre = ?`
-      ).bind(contador.procesados, contador.bloqueados, contador.escalados, agente)
+          WHERE tenant_id = ? AND nombre = ?`
+      ).bind(contador.procesados, contador.bloqueados, contador.escalados, tenantId, agente)
     );
   }
 
   for (const fila of filasLog) {
     sentencias.push(
       env.DB.prepare(
-        `INSERT INTO logs (id, timestamp, fuente, tipo_evento, ip_origen, destino_ip, host, usuario,
+        `INSERT INTO logs (id, tenant_id, timestamp, fuente, tipo_evento, ip_origen, destino_ip, host, usuario,
                            activo_id, resultado, payload_json, procesado)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
       ).bind(
         fila.id,
+        fila.tenant_id,
         fila.timestamp,
         fila.fuente,
         fila.tipo_evento,
@@ -592,7 +606,7 @@ async function manejarStream(request, env, usuario) {
   }
 
   await insertarCasos(env, casos);
-  await recalcularSalud(env, body.logs.length);
+  await recalcularSalud(env, tenantId, body.logs.length);
 
   // Retención: borra logs de más de 24 h en una fracción de los requests.
   if (Math.random() < 0.05) {
@@ -620,7 +634,7 @@ const RESULTADOS_VALIDOS = new Set(RESULTADOS);
 const COLUMNAS_LOGS =
   'rowid AS seq, timestamp, fuente, tipo_evento, host, destino_ip, ip_origen, usuario, resultado, activo_id';
 
-async function manejarLogs(env, url) {
+async function manejarLogs(env, url, tenantId) {
   const params = url.searchParams;
   const fuente = (params.get('fuente') || '').trim();
   const resultado = (params.get('resultado') || '').trim();
@@ -648,6 +662,9 @@ async function manejarLogs(env, url) {
 
   const condiciones = [];
   const valores = [];
+
+  condiciones.push('tenant_id = ?');
+  valores.push(tenantId);
 
   if (fuente) {
     condiciones.push('fuente = ?');
@@ -751,23 +768,24 @@ async function manejarLogs(env, url) {
   });
 }
 
-async function manejarResetDemo(env) {
-  const borrado = await env.DB.prepare(`DELETE FROM casos`).run();
+async function manejarResetDemo(env, tenantId) {
+  const borrado = await env.DB.prepare(`DELETE FROM casos WHERE tenant_id = ?`).bind(tenantId).run();
   const ahora = new Date().toISOString();
 
   await env.DB.batch([
     env.DB.prepare(
       `UPDATE agentes_estado
-          SET logs_procesados = 0, logs_bloqueados = 0, casos_escalados = 0, estado = 'activo'`
-    ),
+          SET logs_procesados = 0, logs_bloqueados = 0, casos_escalados = 0, estado = 'activo'
+        WHERE tenant_id = ?`
+    ).bind(tenantId),
     env.DB.prepare(
       `UPDATE sistema_salud
           SET salud_porcentaje = 100, amenazas_activas = 0, logs_por_segundo = 0, actualizado_en = ?
-        WHERE id = 1`
-    ).bind(ahora),
+        WHERE tenant_id = ?`
+    ).bind(ahora, tenantId),
     env.DB.prepare(`DELETE FROM intentos_login`),
     env.DB.prepare(`DELETE FROM rate_limit`),
-    env.DB.prepare(`DELETE FROM logs`),
+    env.DB.prepare(`DELETE FROM logs WHERE tenant_id = ?`).bind(tenantId),
   ]);
 
   return json({
@@ -776,7 +794,7 @@ async function manejarResetDemo(env) {
   });
 }
 
-async function manejarDashboard(env) {
+async function manejarDashboard(env, tenantId) {
   const { results: filasCasos } = await env.DB.prepare(
     `SELECT c.*,
             a.hostname AS activo_hostname,
@@ -793,11 +811,13 @@ async function manejarDashboard(env) {
             un.email AS usuario_email
        FROM casos c
        LEFT JOIN activos a ON a.id = c.activo_id
-       LEFT JOIN usuarios_negocio un ON lower(un.username) = lower(c.usuario_afectado)
-      WHERE c.estado IN ${ESTADOS_ACTIVOS}
+       LEFT JOIN usuarios_negocio un ON un.tenant_id = c.tenant_id AND lower(un.username) = lower(c.usuario_afectado)
+      WHERE c.tenant_id = ? AND c.estado IN ${ESTADOS_ACTIVOS}
       ORDER BY c.creado_en DESC
       LIMIT 100`
-  ).all();
+  )
+    .bind(tenantId)
+    .all();
 
   const casos = filasCasos.map((fila) => {
     const {
@@ -848,8 +868,16 @@ async function manejarDashboard(env) {
     };
   });
 
-  const { results: agentes } = await env.DB.prepare(`SELECT * FROM agentes_estado ORDER BY nombre`).all();
-  const salud = await env.DB.prepare(`SELECT salud_porcentaje FROM sistema_salud WHERE id = 1`).first();
+  const { results: agentes } = await env.DB.prepare(
+    `SELECT * FROM agentes_estado WHERE tenant_id = ? ORDER BY nombre`
+  )
+    .bind(tenantId)
+    .all();
+  const salud = await env.DB.prepare(
+    `SELECT salud_porcentaje FROM sistema_salud WHERE tenant_id = ?`
+  )
+    .bind(tenantId)
+    .first();
 
   // Métricas derivadas de la tabla `casos`: única fuente de verdad para no descuadrar
   // los contadores con la cola de casos activos.
@@ -859,12 +887,17 @@ async function manejarDashboard(env) {
             SUM(CASE WHEN estado IN ('contenido', 'falso_positivo') THEN 1 ELSE 0 END) AS atendidos,
             SUM(CASE WHEN estado IN ${ESTADOS_ACTIVOS} THEN 1 ELSE 0 END) AS activos
        FROM casos
+      WHERE tenant_id = ?
       GROUP BY agente_responsable`
-  ).all();
+  )
+    .bind(tenantId)
+    .all();
 
   const { results: porTipo } = await env.DB.prepare(
-    `SELECT titulo, COUNT(*) AS total FROM casos GROUP BY titulo ORDER BY total DESC`
-  ).all();
+    `SELECT titulo, COUNT(*) AS total FROM casos WHERE tenant_id = ? GROUP BY titulo ORDER BY total DESC`
+  )
+    .bind(tenantId)
+    .all();
 
   const metricasPorAgente = Object.values(AGENTE_POR_FUENTE).map((nombre) => {
     const fila = porAgente.find((item) => item.agente_responsable === `Agente ${nombre}`) ?? {};
@@ -879,7 +912,7 @@ async function manejarDashboard(env) {
   return json({
     ok: true,
     data: {
-      salud_sistema: salud ? salud.salud_porcentaje : await recalcularSalud(env),
+      salud_sistema: salud ? salud.salud_porcentaje : await recalcularSalud(env, tenantId),
       casos_activos: casos,
       agentes,
       metricas: {
@@ -890,7 +923,7 @@ async function manejarDashboard(env) {
   });
 }
 
-async function manejarResolucionCaso(request, env, id) {
+async function manejarResolucionCaso(request, env, id, tenantId) {
   let body;
   try {
     body = await request.json();
@@ -908,16 +941,16 @@ async function manejarResolucionCaso(request, env, id) {
   }
 
   const resultado = await env.DB.prepare(
-    `UPDATE casos SET estado = ?, resuelto_en = ? WHERE id = ?`
+    `UPDATE casos SET estado = ?, resuelto_en = ? WHERE id = ? AND tenant_id = ?`
   )
-    .bind(nuevoEstado, new Date().toISOString(), id)
+    .bind(nuevoEstado, new Date().toISOString(), id, tenantId)
     .run();
 
   if (!resultado.meta || resultado.meta.changes === 0) {
     return error(404, `No existe un caso con id "${id}"`, 'NO_ENCONTRADO');
   }
 
-  const salud = await recalcularSalud(env);
+  const salud = await recalcularSalud(env, tenantId);
 
   return json({ ok: true, data: { nuevo_estado: nuevoEstado, salud_sistema: salud } });
 }
@@ -994,15 +1027,15 @@ export default {
         if (usuario.rol !== 'admin') {
           return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
         }
-        return await manejarResetDemo(env);
+        return await manejarResetDemo(env, usuario.tenant_id);
       }
 
       if (url.pathname === '/api/dashboard' && method === 'GET') {
-        return await manejarDashboard(env);
+        return await manejarDashboard(env, usuario.tenant_id);
       }
 
       if (url.pathname === '/api/logs' && method === 'GET') {
-        return await manejarLogs(env, url);
+        return await manejarLogs(env, url, usuario.tenant_id);
       }
 
       if (url.pathname.startsWith('/api/cases/') && method === 'PATCH') {
@@ -1014,7 +1047,7 @@ export default {
           return error(429, 'Demasiadas peticiones. Esperá un minuto antes de reintentar.', 'DEMASIADAS_PETICIONES');
         }
 
-        return await manejarResolucionCaso(request, env, id);
+        return await manejarResolucionCaso(request, env, id, usuario.tenant_id);
       }
 
       return error(404, `Ruta no encontrada: ${method} ${url.pathname}`, 'NO_ENCONTRADO');

@@ -148,9 +148,11 @@ export async function usuarioDesdeRequest(request, env) {
 
   const id = await hashToken(token);
   const fila = await env.DB.prepare(
-    `SELECT s.id AS sesion_id, s.expira_en, u.id, u.email, u.nombre, u.rol, u.activo
+    `SELECT s.id AS sesion_id, s.expira_en, u.id, u.email, u.nombre, u.rol, u.activo,
+            u.tenant_id, t.nombre AS tenant_nombre
        FROM sesiones s
        JOIN usuarios u ON u.id = s.usuario_id
+       JOIN tenants t ON t.id = u.tenant_id
       WHERE s.id = ?`
   )
     .bind(id)
@@ -168,6 +170,8 @@ export async function usuarioDesdeRequest(request, env) {
     email: fila.email,
     nombre: fila.nombre,
     rol: fila.rol,
+    tenant_id: fila.tenant_id,
+    tenant_nombre: fila.tenant_nombre,
     sesionId: fila.sesion_id,
   };
 }
@@ -224,7 +228,14 @@ export async function manejarLogin(request, env, json, error) {
     return error(429, 'Demasiados intentos fallidos. Esperá unos minutos antes de reintentar.', 'DEMASIADOS_INTENTOS');
   }
 
-  const usuario = await env.DB.prepare(`SELECT * FROM usuarios WHERE email = ?`).bind(email).first();
+  const usuario = await env.DB.prepare(
+    `SELECT u.*, t.nombre AS tenant_nombre
+       FROM usuarios u
+       JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.email = ?`
+  )
+    .bind(email)
+    .first();
 
   // Si el usuario no existe, igual derivamos con un salt fijo para no filtrar por timing.
   const iteraciones = usuario?.password_iteraciones ?? ITERACIONES_DEFECTO;
@@ -252,6 +263,8 @@ export async function manejarLogin(request, env, json, error) {
         email: usuario.email,
         nombre: usuario.nombre,
         rol: usuario.rol,
+        tenant_id: usuario.tenant_id,
+        tenant_nombre: usuario.tenant_nombre,
       },
     },
   });
