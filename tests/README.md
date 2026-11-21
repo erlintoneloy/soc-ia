@@ -33,13 +33,20 @@ Un solo proceso sirve el dashboard y la API en `http://127.0.0.1:8787`.
 
 ## 3. Credenciales de demo
 
-| Rol | Email | Contraseña |
-|---|---|---|
-| Analista | `analista@soc-ia.demo` | `********` |
-| Admin | `admin@soc-ia.demo` | `********` |
+Las contraseñas no se versionan. Copiá `.env.example` a `.env` y completá:
 
-> Las contraseñas no se publican en el repositorio. Se comparten fuera del
-> canal público; son cuentas de demostración.
+```dotenv
+SOC_IA_PASSWORD=
+SOC_IA_ADMIN_PASSWORD=
+```
+
+`npm run test:smoke` y `npm run sim` cargan ese archivo con
+`--env-file-if-exists=.env`. Las cuentas son:
+
+| Rol | Email |
+|---|---|
+| Analista | `analista@soc-ia.demo` |
+| Admin | `admin@soc-ia.demo` |
 
 ## 4. Smoke test
 

@@ -21,6 +21,11 @@ const RUN_ID = randomUUID().slice(0, 8);
 const REQUEST_TIMEOUT_MS = 10000;
 const AI_TIMEOUT_MS = 30000;
 
+const CREDENCIALES = {
+  analista: { email: 'analista@soc-ia.demo', password: process.env.SOC_IA_PASSWORD || '' },
+  admin: { email: 'admin@soc-ia.demo', password: process.env.SOC_IA_ADMIN_PASSWORD || '' },
+};
+
 /** Ids de los casos creados por esta corrida, para limpiarlos al final. */
 const casosCreados = [];
 let casoFuerzaBruta = null;
@@ -137,6 +142,13 @@ describe('SOC-IA smoke test', () => {
 
     assert.equal(health.status, 200, 'GET /api/health debe responder HTTP 200');
     assert.equal(health.json.ok, true, 'GET /api/health debe responder ok:true');
+
+    if (!CREDENCIALES.analista.password || !CREDENCIALES.admin.password) {
+      throw new Error(
+        'Faltan SOC_IA_PASSWORD y/o SOC_IA_ADMIN_PASSWORD.\n' +
+          'Copiá .env.example a .env y completá las credenciales de demo antes de correr el suite.'
+      );
+    }
   });
 
   after(async () => {
@@ -193,7 +205,7 @@ describe('SOC-IA smoke test', () => {
   it('permite el login con las credenciales de demo', async () => {
     const { status, json } = await api('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: 'analista@soc-ia.demo', password: 'SocIA2026!' }),
+      body: JSON.stringify(CREDENCIALES.analista),
     });
 
     assert.equal(status, 200);
@@ -485,7 +497,7 @@ describe('SOC-IA smoke test', () => {
   });
 
   it('aplica rate limit por usuario en la ingesta', { timeout: 120000 }, async () => {
-    const adminCookie = await loginComo('admin@soc-ia.demo', 'AdminSocIA2026!');
+    const adminCookie = await loginComo(CREDENCIALES.admin.email, CREDENCIALES.admin.password);
     const log = { fuente: 'red', tipo_evento: 'request_normal', ip: '10.0.0.1' };
 
     for (let intento = 0; intento < 30; intento++) {
@@ -517,7 +529,7 @@ describe('SOC-IA smoke test', () => {
   });
 
   it('reinicia la demo y deja el SOC en verde', async () => {
-    const adminCookie = await loginComo('admin@soc-ia.demo', 'AdminSocIA2026!');
+    const adminCookie = await loginComo(CREDENCIALES.admin.email, CREDENCIALES.admin.password);
 
     const reset = await api('/api/demo/reset', {
       method: 'POST',
@@ -549,7 +561,7 @@ describe('SOC-IA smoke test', () => {
     // Restaurar la sesión para que la limpieza final pueda resolver los casos.
     const login = await api('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: 'analista@soc-ia.demo', password: 'SocIA2026!' }),
+      body: JSON.stringify(CREDENCIALES.analista),
     });
     assert.equal(login.status, 200);
   });

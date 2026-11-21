@@ -50,13 +50,13 @@ Opciones:
   --dry-run            Genera y muestra los logs sin enviarlos
   --quiet              No imprime cada log, solo el resumen
   --email <email>      Usuario para autenticarse (default: analista@soc-ia.demo)
-  --password <clave>   Contraseña del usuario (default: SocIA2026!)
+  --password <clave>   Contraseña del usuario (o SOC_IA_PASSWORD)
   -h, --help           Muestra esta ayuda
 
 Variables de entorno:
   SOC_IA_URL           URL base del Worker (equivale a --url)
   SOC_IA_EMAIL         Usuario para autenticarse
-  SOC_IA_PASSWORD      Contraseña del usuario
+  SOC_IA_PASSWORD      Contraseña del usuario (se carga desde .env)
   NO_COLOR             Desactiva los colores de la salida
 `);
 }
@@ -77,7 +77,7 @@ function parseArgs(argv) {
     dryRun: false,
     quiet: false,
     email: process.env.SOC_IA_EMAIL || 'analista@soc-ia.demo',
-    password: process.env.SOC_IA_PASSWORD || 'SocIA2026!',
+    password: process.env.SOC_IA_PASSWORD || '',
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -224,6 +224,12 @@ function sleep(ms) {
 }
 
 async function iniciarSesion(url, email, password) {
+  if (!password) {
+    console.error(`\n${paint('red', 'Falta la contraseña de demo.')}`);
+    console.error('Definí SOC_IA_PASSWORD en .env o pasá --password.\n');
+    process.exit(2);
+  }
+
   let response;
 
   try {
