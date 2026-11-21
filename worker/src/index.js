@@ -1,27 +1,15 @@
 import { manejarLogin, manejarLogout, usuarioDesdeRequest } from './auth.js';
-
-const AGENTE_POR_FUENTE = {
-  red: 'Red',
-  identidad: 'Identidad',
-  endpoint: 'Endpoint',
-};
-
-// Reglas deterministas del SPEC (sección 4).
-const REGLAS = {
-  'red:escaneo_puertos': {
-    severidad: 'alta',
-    titulo: 'Escaneo de puertos detectado',
-  },
-  'identidad:login_fallido': {
-    severidad: 'alta',
-    titulo: 'Posible ataque de fuerza bruta',
-    condicion: (log) => Number(log.intentos) > 5,
-  },
-  'endpoint:powershell_encoded': {
-    severidad: 'critica',
-    titulo: 'Ejecución de PowerShell ofuscado',
-  },
-};
+import {
+  AGENTE_POR_FUENTE,
+  RESULTADOS,
+  UMBRAL_AUTO_BLOQUEO,
+  UMBRAL_FUERZA_BRUTA,
+  VENTANA_DETECCION_MS,
+  calcularPrioridad,
+  claveDedupe,
+  evaluarEvento,
+  superaUmbral,
+} from './engine.js';
 
 const ESTADOS_RESOLUCION = ['contenido', 'falso_positivo'];
 const ESTADOS_ACTIVOS = "('escalado', 'en_triaje')";
@@ -31,7 +19,6 @@ const MAX_IA_POR_LOTE = 3;
 const MAX_STREAM_POR_MINUTO = 30;
 const MAX_PATCH_POR_MINUTO = 60;
 const COOLDOWN_DEDUPE_MS = 60 * 1000;
-const ESCALA = { baja: 1, media: 2, alta: 3, critica: 4 };
 const CRITICIDAD_POR_DEFECTO = 'media';
 
 function json(data, status = 200) {
@@ -106,18 +93,6 @@ function validarLog(log, indice) {
   }
 
   return null;
-}
-
-function evaluarLog(log) {
-  const regla = REGLAS[`${log.fuente}:${log.tipo_evento}`];
-  if (!regla) return null;
-  if (regla.condicion && !regla.condicion(log)) return null;
-
-  return {
-    agente: AGENTE_POR_FUENTE[log.fuente],
-    severidad: regla.severidad,
-    titulo: regla.titulo,
-  };
 }
 
 async function generarResumenIA(env, { titulo, agente, severidad, log, contexto }) {
@@ -265,20 +240,8 @@ async function consumirLimite(env, clave, maximo, ventanaMs) {
   return { permitido: true, restantes: maximo - Number(fila.contador) - 1 };
 }
 
-function claveDedupe(log) {
-  const partes = [log.host, log.destino_ip, log.usuario, log.ip_origen || log.ip].filter(Boolean);
-  const actor = partes.length ? partes.join('|') : 'desconocido';
-  return `${log.fuente}|${log.tipo_evento}|${String(actor).slice(0, 200)}`;
-}
-
-function calcularPrioridad(severidad, criticidad) {
-  const puntaje = (ESCALA[severidad] || 2) * (ESCALA[criticidad] || 2);
-  if (puntaje >= 12) return 'P1';
-  if (puntaje >= 6) return 'P2';
-  return 'P3';
-}
-
-async function resolverActivo(env, log, cache) {  const host = typeof log.host === 'string' ? log.host.trim() : '';
+async function resolverActivo(env, log, cache) {
+  const host = typeof log.host === 'string' ? log.host.trim() : '';
   const destino = typeof log.destino_ip === 'string' ? log.destino_ip.trim() : '';
   if (!host && !destino) return null;
 
@@ -378,6 +341,60 @@ async function manejarStream(request, env, usuario) {
     if (problema) return error(400, problema, 'VALIDACION');
   }
 
+  const ventanaDesde = new Date(Date.now() - VENTANA_DETECCION_MS).toISOString();
+
+  // Cuenta previa en la ventana de 60 s, agrupada por usuario e IP en una sola consulta.
+  const usuariosVentana = new Set();
+  const ipsVentana = new Set();
+
+  for (const log of body.logs) {
+    if (log.fuente === 'identidad' && log.tipo_evento === 'login_fallido') {
+      usuariosVentana.add(String(log.usuario || '').trim().toLowerCase());
+    }
+    if (log.fuente === 'red' && log.tipo_evento === 'request_normal') {
+      ipsVentana.add(String(log.ip_origen || log.ip || '').trim());
+    }
+  }
+  usuariosVentana.delete('');
+  ipsVentana.delete('');
+
+  const previosPorUsuario = new Map();
+  if (usuariosVentana.size > 0) {
+    const lista = [...usuariosVentana];
+    const marcas = lista.map(() => '?').join(',');
+    const { results } = await env.DB.prepare(
+      `SELECT lower(usuario) AS clave, COUNT(*) AS total
+         FROM logs
+        WHERE fuente = 'identidad' AND tipo_evento = 'login_fallido'
+          AND timestamp >= ? AND lower(usuario) IN (${marcas})
+        GROUP BY lower(usuario)`
+    )
+      .bind(ventanaDesde, ...lista)
+      .all();
+
+    for (const fila of results) previosPorUsuario.set(fila.clave, Number(fila.total) || 0);
+  }
+
+  const previosPorIp = new Map();
+  if (ipsVentana.size > 0) {
+    const lista = [...ipsVentana];
+    const marcas = lista.map(() => '?').join(',');
+    const { results } = await env.DB.prepare(
+      `SELECT ip_origen AS clave, COUNT(*) AS total
+         FROM logs
+        WHERE fuente = 'red' AND tipo_evento = 'request_normal'
+          AND timestamp >= ? AND ip_origen IN (${marcas})
+        GROUP BY ip_origen`
+    )
+      .bind(ventanaDesde, ...lista)
+      .all();
+
+    for (const fila of results) previosPorIp.set(fila.clave, Number(fila.total) || 0);
+  }
+
+  const lotePorUsuario = new Map();
+  const lotePorIp = new Map();
+
   const contadores = new Map(
     Object.values(AGENTE_POR_FUENTE).map((agente) => [agente, { procesados: 0, bloqueados: 0, escalados: 0 }])
   );
@@ -388,6 +405,8 @@ async function manejarStream(request, env, usuario) {
   const filasLog = [];
   const creadoEn = new Date().toISOString();
   let descartados = 0;
+  let observados = 0;
+  let bloqueados = 0;
   let duplicados = 0;
   let iaUsadas = 0;
 
@@ -396,12 +415,43 @@ async function manejarStream(request, env, usuario) {
     const contador = contadores.get(agente);
     contador.procesados++;
 
-    const deteccion = evaluarLog(log);
+    const deteccion = evaluarEvento(log);
+
     if (!deteccion) {
+      let resultado = 'descartado';
+
+      // Auto-bloqueo de red: más de 100 requests del mismo origen en 60 s.
+      if (log.fuente === 'red' && log.tipo_evento === 'request_normal') {
+        const ip = String(log.ip_origen || log.ip || '').trim();
+        if (ip) {
+          const lote = (lotePorIp.get(ip) || 0) + 1;
+          lotePorIp.set(ip, lote);
+          if (superaUmbral(previosPorIp.get(ip) || 0, lote, UMBRAL_AUTO_BLOQUEO)) {
+            resultado = 'bloqueado';
+          }
+        }
+      }
+
       contador.bloqueados++;
-      descartados++;
-      filasLog.push(nuevaFilaLog(log, 'descartado', null, creadoEn));
+      if (resultado === 'bloqueado') bloqueados++;
+      else descartados++;
+
+      filasLog.push(nuevaFilaLog(log, resultado, null, creadoEn));
       continue;
+    }
+
+    // Fuerza bruta: el sexto fallo del mismo usuario en 60 s dispara el caso.
+    if (log.fuente === 'identidad' && log.tipo_evento === 'login_fallido') {
+      const usuario = String(log.usuario || '').trim().toLowerCase();
+      const lote = (lotePorUsuario.get(usuario) || 0) + 1;
+      lotePorUsuario.set(usuario, lote);
+
+      if (!superaUmbral(previosPorUsuario.get(usuario) || 0, lote, UMBRAL_FUERZA_BRUTA)) {
+        contador.bloqueados++;
+        observados++;
+        filasLog.push(nuevaFilaLog(log, 'observado', null, creadoEn));
+        continue;
+      }
     }
 
     contador.escalados++;
@@ -555,8 +605,10 @@ async function manejarStream(request, env, usuario) {
     ok: true,
     data: {
       procesados: body.logs.length,
-      escalados: body.logs.length - descartados,
+      escalados: body.logs.length - descartados - observados - bloqueados,
       descartados,
+      observados,
+      bloqueados,
       casos_creados: casos.length,
       duplicados,
     },
@@ -564,7 +616,7 @@ async function manejarStream(request, env, usuario) {
 }
 
 const FUENTES_VALIDAS = new Set(Object.keys(AGENTE_POR_FUENTE));
-const RESULTADOS_VALIDOS = new Set(['escalado', 'descartado', 'duplicado']);
+const RESULTADOS_VALIDOS = new Set(RESULTADOS);
 const COLUMNAS_LOGS =
   'rowid AS seq, timestamp, fuente, tipo_evento, host, destino_ip, ip_origen, usuario, resultado, activo_id';
 
