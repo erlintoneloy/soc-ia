@@ -189,4 +189,5 @@ npm run test:smoke
 - [`docs/ADR.md`](docs/ADR.md) — decisiones de arquitectura.
 - [`docs/DEMO.md`](docs/DEMO.md) — guion de demo paso a paso.
 - [`docs/ATTACK_CONSOLE.md`](docs/ATTACK_CONSOLE.md) — integración de la consola de ataque.
-- [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) — estándares de trabajo.
+- [`docs/CHECKLIST.md`](docs/CHECKLIST.md) — checklist previa a la demo.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — ramas, commits, PR y Definition of Done.
