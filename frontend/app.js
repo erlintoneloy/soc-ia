@@ -179,6 +179,7 @@ function mostrarLogin(mensaje = '') {
   document.getElementById('app-shell').hidden = true;
   document.getElementById('login-screen').hidden = false;
   document.getElementById('user-chip').textContent = '';
+  document.getElementById('tenant-chip').textContent = '';
   mostrarErrorLogin(mensaje);
 }
 
@@ -188,6 +189,7 @@ async function entrarApp(usuario) {
   document.getElementById('login-screen').hidden = true;
   document.getElementById('app-shell').hidden = false;
   document.getElementById('user-chip').innerHTML = `<b>${escapeHtml(usuario.nombre)}</b> · ${escapeHtml(usuario.rol)}`;
+  document.getElementById('tenant-chip').textContent = usuario.tenant_nombre || '';
   document.getElementById('btn-reset').hidden = usuario.rol !== 'admin';
   cerrarExplorador();
 
@@ -484,6 +486,46 @@ const LOTE_DEMO = [
   },
 ];
 
+const LOTE_BANCO = [
+  ...Array.from({ length: 8 }, () => ({
+    fuente: 'identidad',
+    tipo_evento: 'login_fallido',
+    usuario: 'cajero.01',
+    host: 'WS-CAJA-05',
+    destino_ip: '10.30.20.5',
+    ip_origen: '198.51.100.90',
+    intentos: 1,
+  })),
+  {
+    fuente: 'endpoint',
+    tipo_evento: 'powershell_encoded',
+    usuario: 'admin.banco',
+    host: 'SRV-CORE-01',
+    destino_ip: '10.30.80.11',
+    ip_origen: '203.0.113.70',
+    payload: 'powershell -enc aGVsbG8=',
+  },
+  {
+    fuente: 'red',
+    tipo_evento: 'escaneo_puertos',
+    host: 'FW-BANCO-01',
+    destino_ip: '10.30.80.1',
+    ip_origen: '203.0.113.71',
+    puertos: [22, 443, 3389],
+  },
+  {
+    fuente: 'identidad',
+    tipo_evento: 'login_exitoso',
+    usuario: 'jefe.tesoreria',
+    host: 'SRV-HOME-01',
+    destino_ip: '10.30.80.12',
+  },
+];
+
+function loteDemo() {
+  return app.usuario?.tenant_id === 'banco-litoral' ? LOTE_BANCO : LOTE_DEMO;
+}
+
 document.getElementById('btn-simulate').addEventListener('click', async (evento) => {
   const boton = evento.currentTarget;
   boton.disabled = true;
@@ -492,7 +534,7 @@ document.getElementById('btn-simulate').addEventListener('click', async (evento)
   try {
     const json = await pedirJSON('/stream', {
       method: 'POST',
-      body: JSON.stringify({ logs: LOTE_DEMO }),
+      body: JSON.stringify({ logs: loteDemo() }),
     });
 
     const { procesados, casos_creados, duplicados, descartados, observados, bloqueados } = json.data;
