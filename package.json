@@ -2,12 +2,19 @@
   "name": "soc-ia",
   "version": "1.0.0",
   "private": true,
-  "description": "SOC-IA: simulador de logs y smoke tests end-to-end",
+  "description": "SOC-IA: dashboard de agentes de seguridad sobre Cloudflare Workers, D1 y Workers AI",
   "type": "commonjs",
   "scripts": {
     "sim": "node tests/simulator.js",
     "test:smoke": "node --test tests/",
     "db:reset": "node -e \"require('node:fs').rmSync('worker/.wrangler/state', { recursive: true, force: true })\"",
-    "db:init": "npm --prefix worker exec -- wrangler d1 execute soc-ia-db --local --file=schema.sql && npm --prefix worker exec -- wrangler d1 execute soc-ia-db --local --file=seed.sql"
+    "db:init": "cd worker && npm run db:init",
+    "db:init:remote": "cd worker && npm run db:init:remote",
+    "deploy": "wrangler deploy --config wrangler.frontend.jsonc",
+    "deploy:worker": "cd worker && npm run deploy",
+    "preview": "wrangler dev --config wrangler.frontend.jsonc"
+  },
+  "devDependencies": {
+    "wrangler": "^4.166.0"
   }
 }
