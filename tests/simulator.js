@@ -16,7 +16,7 @@
 const { randomUUID } = require('node:crypto');
 
 const DEFAULT_URL = process.env.SOC_IA_URL || 'http://127.0.0.1:8787';
-const SCENARIOS = ['mixto', 'ruido', 'fuerza-bruta', 'escaneo', 'powershell'];
+const SCENARIOS = ['mixto', 'ruido', 'fuerza-bruta', 'escaneo', 'powershell', 'desconocido'];
 const BATCH_SIZE = 25;
 
 const COLORS = {
@@ -138,8 +138,6 @@ function randomIp() {
 }
 
 function attackLog(scenario, index, runId) {
-  const ip = randomIp();
-
   switch (scenario) {
     case 'fuerza-bruta':
       return {
@@ -147,8 +145,10 @@ function attackLog(scenario, index, runId) {
         log: {
           fuente: 'identidad',
           tipo_evento: 'login_fallido',
-          usuario: `svc_backup_${runId}`,
-          ip,
+          usuario: 'jefe.finanzas',
+          host: 'WS-FAC-05',
+          destino_ip: '10.20.50.5',
+          ip_origen: '198.51.100.23',
           intentos: 8 + (index % 10),
         },
       };
@@ -158,19 +158,43 @@ function attackLog(scenario, index, runId) {
         log: {
           fuente: 'red',
           tipo_evento: 'escaneo_puertos',
-          ip,
+          host: 'FW-PERIMETRO-01',
+          destino_ip: '10.20.80.1',
+          ip_origen: '203.0.113.45',
           puertos: [22, 80, 443, 3389, 8080],
         },
       };
-    case 'powershell':
+    case 'powershell': {
+      const objetivos = [
+        { host: 'WS-GUARDIA-03', ip: '10.20.10.13', usuario: 'guardia.turno' },
+        { host: 'WS-LAB-07', ip: '10.20.20.7', usuario: 'bioq.lab' },
+        { host: 'WS-IMG-02', ip: '10.20.30.2', usuario: 'tecnico.img' },
+      ];
+      const objetivo = objetivos[index % objetivos.length];
+
       return {
         severity: 'critica',
         log: {
           fuente: 'endpoint',
           tipo_evento: 'powershell_encoded',
-          host: `WS-${String(index).padStart(3, '0')}`,
-          usuario: `DOM\\usr_${runId}`,
+          host: objetivo.host,
+          destino_ip: objetivo.ip,
+          usuario: objetivo.usuario,
+          ip_origen: '198.51.100.77',
           payload: 'powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA',
+        },
+      };
+    }
+    case 'desconocido':
+      return {
+        severity: 'critica',
+        log: {
+          fuente: 'endpoint',
+          tipo_evento: 'powershell_encoded',
+          host: 'WS-DESCONOCIDO-99',
+          usuario: `externo_${runId}`,
+          ip_origen: '203.0.113.99',
+          payload: 'powershell.exe -enc SQBFAFgA',
         },
       };
     default:
@@ -179,14 +203,43 @@ function attackLog(scenario, index, runId) {
 }
 
 function noiseLog(index) {
-  const ip = randomIp();
-  const variants = [
-    { fuente: 'identidad', tipo_evento: 'login_exitoso', usuario: `analista_${index % 7}`, ip },
-    { fuente: 'identidad', tipo_evento: 'login_fallido', usuario: `analista_${index % 7}`, ip, intentos: 1 },
-    { fuente: 'red', tipo_evento: 'request_normal', ip, bytes: 1024 + index },
-    { fuente: 'endpoint', tipo_evento: 'proceso_firmado', host: `WS-${String(index).padStart(3, '0')}`, firma: 'Microsoft Corporation' },
+  const variantes = [
+    {
+      fuente: 'identidad',
+      tipo_evento: 'login_exitoso',
+      usuario: 'admision.01',
+      host: 'WS-ADM-11',
+      destino_ip: '10.20.40.11',
+      ip_origen: randomIp(),
+    },
+    {
+      fuente: 'identidad',
+      tipo_evento: 'login_fallido',
+      usuario: 'guardia.turno',
+      host: 'WS-GUARDIA-03',
+      destino_ip: '10.20.10.13',
+      ip_origen: randomIp(),
+      intentos: 1,
+    },
+    {
+      fuente: 'red',
+      tipo_evento: 'request_normal',
+      host: 'SRV-WEB-01',
+      destino_ip: '10.20.80.18',
+      ip_origen: randomIp(),
+      bytes: 1024 + index,
+    },
+    {
+      fuente: 'endpoint',
+      tipo_evento: 'proceso_firmado',
+      host: 'WS-RRHH-04',
+      destino_ip: '10.20.70.4',
+      usuario: 'rrhh.01',
+      firma: 'Microsoft Corporation',
+    },
   ];
-  return { severity: 'baja', log: variants[index % variants.length] };
+
+  return { severity: 'baja', log: variantes[index % variantes.length] };
 }
 
 function buildLogs({ scenario, logs }, runId) {

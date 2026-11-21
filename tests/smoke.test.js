@@ -126,6 +126,13 @@ async function nuevoCasoDesde(idsPrevios, log, { timeout = AI_TIMEOUT_MS } = {})
   return creado;
 }
 
+async function nuevoCasoDesdeIds(idsPrevios) {
+  const data = await dashboard();
+  const creado = data.casos_activos.find((caso) => !idsPrevios.has(caso.id));
+  assert.ok(creado, 'No se encontró el caso nuevo en el dashboard');
+  return creado;
+}
+
 describe('SOC-IA smoke test', () => {
   before(async () => {
     let health;
@@ -288,8 +295,10 @@ describe('SOC-IA smoke test', () => {
     const caso = await nuevoCasoDesde(idsPrevios, {
       fuente: 'identidad',
       tipo_evento: 'login_fallido',
-      usuario: `smoke_${RUN_ID}`,
-      ip: '10.255.255.2',
+      usuario: `jefe.finanzas.${RUN_ID}`,
+      host: 'WS-FAC-05',
+      destino_ip: '10.20.50.5',
+      ip_origen: '198.51.100.23',
       intentos: 15,
     });
 
@@ -297,6 +306,9 @@ describe('SOC-IA smoke test', () => {
     assert.equal(caso.agente_responsable, 'Agente Identidad');
     assert.ok(caso.resumen_ia, 'El caso debe traer resumen_ia (real o fallback)');
     assert.ok(caso.recomendacion_ia, 'El caso debe traer recomendacion_ia');
+    assert.equal(caso.activo.hostname, 'WS-FAC-05');
+    assert.equal(caso.activo.departamento, 'Facturación');
+    assert.equal(caso.prioridad, 'P2');
 
     const despues = await agente('Identidad');
     assert.equal(despues.casos_escalados, antes.casos_escalados + 1);
@@ -311,8 +323,10 @@ describe('SOC-IA smoke test', () => {
     const log = {
       fuente: 'identidad',
       tipo_evento: 'login_fallido',
-      usuario: `smoke_${RUN_ID}`,
-      ip: '10.255.255.2',
+      usuario: `jefe.finanzas.${RUN_ID}`,
+      host: 'WS-FAC-05',
+      destino_ip: '10.20.50.5',
+      ip_origen: '198.51.100.23',
       intentos: 15,
     };
 
@@ -339,12 +353,18 @@ describe('SOC-IA smoke test', () => {
     const caso = await nuevoCasoDesde(await idsActivos(), {
       fuente: 'endpoint',
       tipo_evento: 'powershell_encoded',
-      host: 'WS-SMOKE',
+      host: 'SRV-HIS-01',
+      destino_ip: '10.20.80.11',
+      usuario: `admin.ti.${RUN_ID}`,
+      ip_origen: '203.0.113.50',
       payload: 'powershell.exe -nop -w hidden -enc SQBFAFgA',
     });
 
     assert.equal(caso.severidad, 'critica');
     assert.equal(caso.agente_responsable, 'Agente Endpoint');
+    assert.equal(caso.activo.hostname, 'SRV-HIS-01');
+    assert.equal(caso.activo.departamento, 'TI');
+    assert.equal(caso.prioridad, 'P1');
   });
 
   it('limita las inferencias por lote y marca el resumen de respaldo', { timeout: 90000 }, async () => {
@@ -374,6 +394,123 @@ describe('SOC-IA smoke test', () => {
 
     const respaldos = nuevos.filter((caso) => caso.resumen_fuente === 'fallback');
     assert.ok(respaldos.length >= 2, 'El tope de 3 inferencias debe dejar al menos 2 con respaldo');
+
+    for (const caso of nuevos) casosCreados.push(caso.id);
+  });
+
+  it('resuelve el activo por IP cuando falta el host', async () => {
+    const idsAntes = await idsActivos();
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({
+        logs: [
+          {
+            fuente: 'identidad',
+            tipo_evento: 'login_fallido',
+            usuario: `guardia.${RUN_ID}`,
+            destino_ip: '10.20.10.13',
+            ip_origen: '198.51.100.44',
+            intentos: 15,
+          },
+        ],
+      }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.casos_creados, 1);
+
+    const caso = await nuevoCasoDesdeIds(idsAntes);
+    assert.equal(caso.activo.hostname, 'WS-GUARDIA-03');
+    assert.equal(caso.activo.departamento, 'Guardia');
+
+    const evidencia = JSON.parse(caso.evidencia_json);
+    assert.equal(evidencia.destino_ip, '10.20.10.13');
+    assert.equal(evidencia.usuario, `guardia.${RUN_ID}`);
+    assert.ok(caso.evidencia_json.length <= 500, 'La evidencia debe estar acotada');
+
+    casosCreados.push(caso.id);
+
+    // Se resuelve para no dejar un caso de Identidad activo antes del triage.
+    await api(`/api/cases/${caso.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ estado: 'falso_positivo' }),
+    });
+  });
+
+  it('marca como desconocido un activo fuera del inventario', async () => {
+    const idsAntes = await idsActivos();
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({
+        logs: [
+          {
+            fuente: 'endpoint',
+            tipo_evento: 'powershell_encoded',
+            host: 'WS-INEXISTENTE-99',
+            usuario: `externo.${RUN_ID}`,
+            ip_origen: '203.0.113.99',
+            payload: 'powershell.exe -enc SQBFAFgA',
+          },
+        ],
+      }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.casos_creados, 1);
+
+    const caso = await nuevoCasoDesdeIds(idsAntes);
+    assert.equal(caso.activo, null);
+    assert.equal(caso.prioridad, 'P2', 'Sin activo se asume criticidad media');
+
+    casosCreados.push(caso.id);
+  });
+
+  it('crea un caso por cada activo afectado', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
+    const idsAntes = await idsActivos();
+    const base = {
+      fuente: 'endpoint',
+      tipo_evento: 'powershell_encoded',
+      payload: 'powershell.exe -enc SQBFAFgA',
+    };
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      timeout: AI_TIMEOUT_MS,
+      body: JSON.stringify({
+        logs: [
+          {
+            ...base,
+            host: 'WS-LAB-07',
+            destino_ip: '10.20.20.7',
+            usuario: `lab.${RUN_ID}`,
+            ip_origen: '203.0.113.61',
+          },
+          {
+            ...base,
+            host: 'WS-IMG-02',
+            destino_ip: '10.20.30.2',
+            usuario: `img.${RUN_ID}`,
+            ip_origen: '203.0.113.62',
+          },
+        ],
+      }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.casos_creados, 2);
+    assert.equal(json.data.duplicados, 0);
+
+    const data = await dashboard();
+    const nuevos = data.casos_activos.filter((caso) => !idsAntes.has(caso.id));
+
+    assert.equal(nuevos.length, 2);
+    assert.deepEqual(
+      nuevos.map((caso) => caso.activo.hostname).sort(),
+      ['WS-IMG-02', 'WS-LAB-07'],
+      'Cada activo debe generar su propio caso'
+    );
 
     for (const caso of nuevos) casosCreados.push(caso.id);
   });

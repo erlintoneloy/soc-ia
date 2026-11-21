@@ -16,7 +16,8 @@ agentes, la salud inicial y los usuarios de demo. Es idempotente (`INSERT OR IGN
 
 > Si ya tenías un estado local viejo, `npm run db:reset` lo borra y después
 > volvés a ejecutar `npm run db:init`. Si la base existía antes de la Fase 2,
-> aplicá `npm run db:migrate` una sola vez.
+> aplicá `npm run db:migrate` una sola vez. Para el inventario de activos:
+> `npm run db:migrate:activos`.
 
 ## 2. Levantar el Worker
 
@@ -74,6 +75,9 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | El mismo ataque no duplica caso en 60 s | `POST /api/stream` |
 | PowerShell ofuscado como `critica` | `POST /api/stream` |
 | Tope de 3 inferencias por lote con respaldo | `POST /api/stream` |
+| Activo resuelto por IP cuando falta el host | `POST /api/stream` |
+| Activo desconocido con prioridad media | `POST /api/stream` |
+| Un caso por cada activo afectado | `POST /api/stream` |
 | Métricas consistentes para los gráficos | `GET /api/dashboard` |
 | Salud según `100 - 20·críticas - 10·altas` | `GET /api/dashboard` |
 | Resolución con `nuevo_estado` y salud | `PATCH /api/cases/:id` |
