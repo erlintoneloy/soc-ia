@@ -99,3 +99,70 @@ body {
 .btn-action { flex: 1; padding: 0.4rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: bold; }
 .btn-approve { background: var(--success); color: #000; }
 .btn-ignore { background: #4b5563; color: white; }
+
+/* TOPBAR: estado de conexión y acciones */
+.topbar-actions { display: flex; align-items: center; gap: 1rem; }
+
+.conn-status {
+    font-size: 0.75rem; font-weight: 700; padding: 0.25rem 0.6rem;
+    border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+}
+.conn-status.ok { color: var(--success); background: rgba(34, 197, 94, 0.1); border-color: rgba(34, 197, 94, 0.3); }
+.conn-status.offline { color: var(--danger); background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); }
+
+/* AGENTES: título con estado */
+.agent-title { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.agent-state {
+    font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 0.15rem 0.45rem; border-radius: 999px;
+    background: rgba(34, 197, 94, 0.12); color: var(--success);
+}
+.agent-state.alerta { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
+.agent-state.offline { background: rgba(156, 163, 175, 0.12); color: var(--text-muted); }
+
+/* CASOS: severidades y estados vacíos */
+.case-agent { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+.badge.critica { background: var(--danger); color: #fff; }
+.badge.media { background: #f59e0b; color: #000; }
+.badge.baja { background: var(--success); color: #000; }
+
+.empty-state {
+    color: var(--text-muted); text-align: center; font-size: 0.82rem;
+    line-height: 1.6; padding: 1rem;
+}
+.empty-state code { color: var(--primary); font-family: var(--font-mono); }
+
+/* TOASTS DE ERROR / ÉXITO */
+.toasts {
+    position: fixed; right: 1.25rem; bottom: 1.25rem; z-index: 1000;
+    display: flex; flex-direction: column; gap: 0.5rem;
+    max-width: min(360px, calc(100vw - 2.5rem));
+}
+.toast {
+    padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.82rem; line-height: 1.4;
+    background: #1f2937; color: var(--text-main);
+    border-left: 4px solid var(--danger);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+    animation: toast-in 0.2s ease-out;
+}
+.toast.success { border-left-color: var(--success); }
+.toast.saliendo { opacity: 0; transform: translateY(6px); transition: opacity 0.25s, transform 0.25s; }
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* RESPONSIVE */
+@media (max-width: 1100px) {
+    .dashboard-grid { grid-template-columns: 220px 1fr 300px; }
+}
+
+@media (max-width: 900px) {
+    body { height: auto; overflow: auto; }
+    .topbar { flex-wrap: wrap; gap: 0.75rem; padding: 1rem; }
+    .dashboard-grid { grid-template-columns: 1fr; overflow: visible; }
+    .panel { min-height: 240px; }
+    .agents-panel, .cases-panel { max-height: 420px; }
+    .console { min-height: 260px; }
+    .health-bar-bg { width: 140px; }
+}

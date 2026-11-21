@@ -17,7 +17,10 @@
             </div>
             <span id="health-text">100%</span>
         </div>
-        <button id="btn-simulate" class="btn-primary">⚡ Simular Lluvia de Logs</button>
+        <div class="topbar-actions">
+            <span id="conn-status" class="conn-status offline">● Sin conexión</span>
+            <button id="btn-simulate" class="btn-primary">⚡ Simular Lluvia de Logs</button>
+        </div>
     </header>
 
     <!-- CONTENIDO PRINCIPAL (3 PANELES) -->
@@ -46,6 +49,8 @@
             </div>
         </aside>
     </main>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
 
     <script src="app.js"></script>
 </body>

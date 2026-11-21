@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>404 | SOC-IA</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg-main: #0b1120;
+            --bg-panel: #111827;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --primary: #0ea5e9;
+            --primary-dark: #0284c7;
+            --warning: #f97316;
+            --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh; display: grid; place-items: center; padding: 2rem;
+            background-color: var(--bg-main); color: var(--text-main);
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+        .card {
+            width: 100%; max-width: 520px; text-align: center;
+            background-color: var(--bg-panel); border: 1px solid #374151;
+            border-radius: 12px; padding: 3rem 2rem;
+        }
+        .code { font-size: 4.5rem; font-weight: 800; line-height: 1; color: var(--primary); }
+        h1 { font-size: 1.3rem; margin: 1rem 0 0.5rem; }
+        p { color: var(--text-muted); font-size: 0.9rem; line-height: 1.6; margin-top: 0.5rem; }
+        code { font-family: var(--font-mono); color: var(--warning); }
+        a {
+            display: inline-block; margin-top: 1.75rem; padding: 0.6rem 1.2rem;
+            background-color: var(--primary); color: #fff; text-decoration: none;
+            font-weight: 700; border-radius: 6px; transition: background 0.2s;
+        }
+        a:hover { background-color: var(--primary-dark); }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="code">404</div>
+        <h1>Fuera del perímetro</h1>
+        <p>La ruta solicitada no existe en este dashboard.</p>
+        <p>Vuelve al centro de operaciones para revisar la flota de agentes.</p>
+        <a href="/">🛡️ Volver al SOC</a>
+    </main>
+</body>
+</html>
