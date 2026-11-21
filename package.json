@@ -11,7 +11,9 @@
     "test:smoke": "node --test tests/",
     "db:reset": "node -e \"require('node:fs').rmSync('.wrangler/state', { recursive: true, force: true })\"",
     "db:init": "wrangler d1 execute soc-ia-db --local --file=worker/schema.sql && wrangler d1 execute soc-ia-db --local --file=worker/seed.sql",
-    "db:init:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/schema.sql && wrangler d1 execute soc-ia-db --remote --yes --file=worker/seed.sql"
+    "db:init:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/schema.sql && wrangler d1 execute soc-ia-db --remote --yes --file=worker/seed.sql",
+    "db:migrate": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0002-fase2.sql",
+    "db:migrate:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0002-fase2.sql"
   },
   "devDependencies": {
     "wrangler": "^4.166.0"

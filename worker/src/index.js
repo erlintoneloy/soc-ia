@@ -27,6 +27,10 @@ const ESTADOS_RESOLUCION = ['contenido', 'falso_positivo'];
 const ESTADOS_ACTIVOS = "('escalado', 'en_triaje')";
 const MAX_LOGS_POR_LOTE = 100;
 const MAX_SENTENCIAS_POR_BATCH = 50;
+const MAX_IA_POR_LOTE = 3;
+const MAX_STREAM_POR_MINUTO = 30;
+const MAX_PATCH_POR_MINUTO = 60;
+const COOLDOWN_DEDUPE_MS = 60 * 1000;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -110,6 +114,7 @@ async function generarResumenIA(env, { titulo, agente, severidad, log }) {
   const fallback = {
     resumen: `${titulo} detectado por el Agente ${agente}. Requiere revisión manual.`,
     recomendacion: 'Aislar el activo afectado y revisar los logs.',
+    fuente: 'fallback',
   };
 
   try {
@@ -139,6 +144,7 @@ async function generarResumenIA(env, { titulo, agente, severidad, log }) {
         typeof parseado.recomendacion === 'string' && parseado.recomendacion
           ? parseado.recomendacion
           : fallback.recomendacion,
+      fuente: 'ia',
     };
   } catch (aiError) {
     // Observabilidad sin payload ni PII: solo el motivo del fallback.
@@ -186,9 +192,22 @@ async function recalcularSalud(env, logsPorSegundo = null) {
 async function insertarCasos(env, casos) {
   const sentencias = casos.map((caso) =>
     env.DB.prepare(
-      `INSERT INTO casos (id, titulo, severidad, agente_responsable, resumen_ia, recomendacion_ia, estado, creado_en)
-       VALUES (?, ?, ?, ?, ?, ?, 'escalado', ?)`
-    ).bind(caso.id, caso.titulo, caso.severidad, caso.agente, caso.resumen, caso.recomendacion, caso.creado_en)
+      `INSERT INTO casos (id, titulo, severidad, agente_responsable, resumen_ia, recomendacion_ia,
+                          estado, creado_en, clave_dedupe, ocurrencias, ultima_ocurrencia, resumen_fuente)
+       VALUES (?, ?, ?, ?, ?, ?, 'escalado', ?, ?, ?, ?, ?)`
+    ).bind(
+      caso.id,
+      caso.titulo,
+      caso.severidad,
+      caso.agente,
+      caso.resumen,
+      caso.recomendacion,
+      caso.creado_en,
+      caso.clave_dedupe,
+      caso.ocurrencias,
+      caso.ultima_ocurrencia,
+      caso.resumen_fuente
+    )
   );
 
   for (let i = 0; i < sentencias.length; i += MAX_SENTENCIAS_POR_BATCH) {
@@ -196,7 +215,49 @@ async function insertarCasos(env, casos) {
   }
 }
 
-async function manejarStream(request, env) {
+async function consumirLimite(env, clave, maximo, ventanaMs) {
+  const ventana = Math.floor(Date.now() / ventanaMs);
+  const ahora = new Date().toISOString();
+
+  const fila = await env.DB.prepare(`SELECT ventana, contador FROM rate_limit WHERE clave = ?`)
+    .bind(clave)
+    .first();
+
+  if (!fila || Number(fila.ventana) !== ventana) {
+    await env.DB.prepare(
+      `INSERT INTO rate_limit (clave, ventana, contador, actualizado_en)
+       VALUES (?, ?, 1, ?)
+       ON CONFLICT(clave) DO UPDATE SET
+         ventana = excluded.ventana,
+         contador = 1,
+         actualizado_en = excluded.actualizado_en`
+    )
+      .bind(clave, ventana, ahora)
+      .run();
+
+    return { permitido: true, restantes: maximo - 1 };
+  }
+
+  if (Number(fila.contador) >= maximo) return { permitido: false, restantes: 0 };
+
+  await env.DB.prepare(`UPDATE rate_limit SET contador = contador + 1, actualizado_en = ? WHERE clave = ?`)
+    .bind(ahora, clave)
+    .run();
+
+  return { permitido: true, restantes: maximo - Number(fila.contador) - 1 };
+}
+
+function claveDedupe(log) {
+  const actor = log.usuario || log.host || log.ip || 'desconocido';
+  return `${log.fuente}|${log.tipo_evento}|${String(actor).slice(0, 120)}`;
+}
+
+async function manejarStream(request, env, usuario) {
+  const limite = await consumirLimite(env, `stream|${usuario.id}`, MAX_STREAM_POR_MINUTO, 60 * 1000);
+  if (!limite.permitido) {
+    return error(429, 'Demasiadas peticiones. Esperá un minuto antes de reintentar.', 'DEMASIADAS_PETICIONES');
+  }
+
   let body;
   try {
     body = await request.json();
@@ -223,7 +284,11 @@ async function manejarStream(request, env) {
     Object.values(AGENTE_POR_FUENTE).map((agente) => [agente, { procesados: 0, bloqueados: 0, escalados: 0 }])
   );
   const casos = [];
+  const casosPorClave = new Map();
   const creadoEn = new Date().toISOString();
+  let descartados = 0;
+  let duplicados = 0;
+  let iaUsadas = 0;
 
   for (const log of body.logs) {
     const agente = AGENTE_POR_FUENTE[log.fuente];
@@ -233,18 +298,62 @@ async function manejarStream(request, env) {
     const deteccion = evaluarLog(log);
     if (!deteccion) {
       contador.bloqueados++;
+      descartados++;
       continue;
     }
 
     contador.escalados++;
-    const { resumen, recomendacion } = await generarResumenIA(env, {
-      titulo: deteccion.titulo,
-      agente,
-      severidad: deteccion.severidad,
-      log,
-    });
+    const clave = claveDedupe(log);
 
-    casos.push({
+    // Duplicado dentro del mismo lote: se acumula sin crear otro caso.
+    const enLote = casosPorClave.get(clave);
+    if (enLote) {
+      enLote.ocurrencias += 1;
+      duplicados++;
+      continue;
+    }
+
+    // Duplicado de un caso activo reciente: se acumula en la ocurrencia existente.
+    const previo = await env.DB.prepare(
+      `SELECT id FROM casos
+        WHERE clave_dedupe = ? AND estado IN ${ESTADOS_ACTIVOS}
+          AND COALESCE(ultima_ocurrencia, creado_en) >= ?
+        LIMIT 1`
+    )
+      .bind(clave, new Date(Date.now() - COOLDOWN_DEDUPE_MS).toISOString())
+      .first();
+
+    if (previo) {
+      await env.DB.prepare(
+        `UPDATE casos SET ocurrencias = ocurrencias + 1, ultima_ocurrencia = ? WHERE id = ?`
+      )
+        .bind(creadoEn, previo.id)
+        .run();
+
+      duplicados++;
+      continue;
+    }
+
+    let resumen;
+    let recomendacion;
+    let fuente;
+
+    // Tope de inferencias por lote para no agotar la cuota ni colgar el request.
+    if (iaUsadas < MAX_IA_POR_LOTE) {
+      iaUsadas += 1;
+      ({ resumen, recomendacion, fuente } = await generarResumenIA(env, {
+        titulo: deteccion.titulo,
+        agente,
+        severidad: deteccion.severidad,
+        log,
+      }));
+    } else {
+      resumen = `${deteccion.titulo} detectado por el Agente ${agente}. Requiere revisión manual.`;
+      recomendacion = 'Aislar el activo afectado y revisar los logs.';
+      fuente = 'fallback';
+    }
+
+    const caso = {
       id: crypto.randomUUID(),
       titulo: deteccion.titulo,
       severidad: deteccion.severidad,
@@ -252,7 +361,14 @@ async function manejarStream(request, env) {
       resumen,
       recomendacion,
       creado_en: creadoEn,
-    });
+      clave_dedupe: clave,
+      ocurrencias: 1,
+      ultima_ocurrencia: creadoEn,
+      resumen_fuente: fuente,
+    };
+
+    casos.push(caso);
+    casosPorClave.set(clave, caso);
   }
 
   // Asegura las filas de agentes y aplica el delta acumulado en una sola transacción.
@@ -286,9 +402,35 @@ async function manejarStream(request, env) {
     ok: true,
     data: {
       procesados: body.logs.length,
-      escalados: casos.length,
-      descartados: body.logs.length - casos.length,
+      escalados: body.logs.length - descartados,
+      descartados,
+      casos_creados: casos.length,
+      duplicados,
     },
+  });
+}
+
+async function manejarResetDemo(env) {
+  const borrado = await env.DB.prepare(`DELETE FROM casos`).run();
+  const ahora = new Date().toISOString();
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE agentes_estado
+          SET logs_procesados = 0, logs_bloqueados = 0, casos_escalados = 0, estado = 'activo'`
+    ),
+    env.DB.prepare(
+      `UPDATE sistema_salud
+          SET salud_porcentaje = 100, amenazas_activas = 0, logs_por_segundo = 0, actualizado_en = ?
+        WHERE id = 1`
+    ).bind(ahora),
+    env.DB.prepare(`DELETE FROM intentos_login`),
+    env.DB.prepare(`DELETE FROM rate_limit`),
+  ]);
+
+  return json({
+    ok: true,
+    data: { casos_eliminados: borrado.meta?.changes ?? 0, salud_sistema: 100 },
   });
 }
 
@@ -435,7 +577,14 @@ export default {
       }
 
       if (url.pathname === '/api/stream' && method === 'POST') {
-        return await manejarStream(request, env);
+        return await manejarStream(request, env, usuario);
+      }
+
+      if (url.pathname === '/api/demo/reset' && method === 'POST') {
+        if (usuario.rol !== 'admin') {
+          return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
+        }
+        return await manejarResetDemo(env);
       }
 
       if (url.pathname === '/api/dashboard' && method === 'GET') {
@@ -445,6 +594,12 @@ export default {
       if (url.pathname.startsWith('/api/cases/') && method === 'PATCH') {
         const id = decodeURIComponent(url.pathname.slice('/api/cases/'.length));
         if (!id) return error(400, 'Falta el id del caso en la ruta', 'VALIDACION');
+
+        const limite = await consumirLimite(env, `patch|${usuario.id}`, MAX_PATCH_POR_MINUTO, 60 * 1000);
+        if (!limite.permitido) {
+          return error(429, 'Demasiadas peticiones. Esperá un minuto antes de reintentar.', 'DEMASIADAS_PETICIONES');
+        }
+
         return await manejarResolucionCaso(request, env, id);
       }
 

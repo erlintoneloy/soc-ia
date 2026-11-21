@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS casos (
     agente_responsable TEXT NOT NULL,
     resumen_ia TEXT,
     recomendacion_ia TEXT,
+    clave_dedupe TEXT,
+    ocurrencias INTEGER NOT NULL DEFAULT 1,
+    ultima_ocurrencia TEXT,
+    resumen_fuente TEXT NOT NULL DEFAULT 'ia',
     estado TEXT NOT NULL CHECK (estado IN ('escalado', 'en_triaje', 'contenido', 'falso_positivo')),
     creado_en TEXT NOT NULL,
     resuelto_en TEXT
@@ -44,6 +48,15 @@ CREATE TABLE IF NOT EXISTS sistema_salud (
 CREATE INDEX IF NOT EXISTS idx_logs_fuente ON logs(fuente);
 CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(ip_origen);
 CREATE INDEX IF NOT EXISTS idx_casos_estado ON casos(estado);
+CREATE INDEX IF NOT EXISTS idx_casos_dedupe ON casos(clave_dedupe, ultima_ocurrencia);
+
+-- Rate limit de la API (ventana fija por minuto)
+CREATE TABLE IF NOT EXISTS rate_limit (
+    clave TEXT PRIMARY KEY,
+    ventana INTEGER NOT NULL,
+    contador INTEGER NOT NULL DEFAULT 0,
+    actualizado_en TEXT NOT NULL
+);
 
 -- Autenticación
 CREATE TABLE IF NOT EXISTS usuarios (
