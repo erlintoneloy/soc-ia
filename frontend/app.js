@@ -1,12 +1,15 @@
-// URL base del Worker. En producción (Cloudflare Pages) define window.SOC_API_URL
-// antes de cargar este script, por ejemplo:
-//   <script>window.SOC_API_URL = 'https://soc-ia-worker.tu-subdominio.workers.dev/api';</script>
-const API_URL = window.SOC_API_URL || 'http://127.0.0.1:8787/api';
+// URL base de la API. El dashboard y el Worker comparten origen.
+const API_URL = window.SOC_API_URL || '/api';
 const MAX_LINEAS_CONSOLA = 200;
 
 const ui = {
   conectado: true,
   avisoRedMostrado: false,
+};
+
+const app = {
+  usuario: null,
+  intervalo: null,
 };
 
 // ---------- Utilidades ----------
@@ -60,7 +63,10 @@ async function pedirJSON(ruta, opciones = {}) {
 
   if (!respuesta.ok || !json?.ok) {
     const detalle = json?.error || `El servidor respondió HTTP ${respuesta.status}`;
-    throw new Error(detalle);
+    const fallo = new Error(detalle);
+    fallo.status = respuesta.status;
+    fallo.code = json?.code;
+    throw fallo;
   }
 
   return json;
@@ -87,6 +93,104 @@ function claseLog(log) {
   return '';
 }
 
+// ---------- Autenticación ----------
+
+function mostrarErrorLogin(mensaje) {
+  const nodo = document.getElementById('login-error');
+  if (!mensaje) {
+    nodo.hidden = true;
+    nodo.textContent = '';
+    return;
+  }
+  nodo.textContent = mensaje;
+  nodo.hidden = false;
+}
+
+function mostrarLogin(mensaje = '') {
+  app.usuario = null;
+
+  if (app.intervalo) {
+    clearInterval(app.intervalo);
+    app.intervalo = null;
+  }
+
+  document.getElementById('app-shell').hidden = true;
+  document.getElementById('login-screen').hidden = false;
+  document.getElementById('user-chip').textContent = '';
+  mostrarErrorLogin(mensaje);
+}
+
+async function entrarApp(usuario) {
+  app.usuario = usuario;
+
+  document.getElementById('login-screen').hidden = true;
+  document.getElementById('app-shell').hidden = false;
+  document.getElementById('user-chip').innerHTML = `<b>${escapeHtml(usuario.nombre)}</b> · ${escapeHtml(usuario.rol)}`;
+
+  mostrarErrorLogin('');
+  marcarConexion(true);
+
+  ajustarEcg();
+  prellenarEcg();
+  dibujarEcg();
+  dibujarDonut();
+  dibujarBarras();
+
+  await cargarDashboard();
+
+  if (!app.usuario) return;
+  if (!app.intervalo) app.intervalo = setInterval(cargarDashboard, 5000);
+}
+
+async function iniciarSesion() {
+  try {
+    const json = await pedirJSON('/auth/me');
+    await entrarApp(json.data.usuario);
+  } catch (fallo) {
+    if (fallo.status === 401) mostrarLogin();
+    else mostrarLogin(`No se pudo verificar la sesión: ${fallo.message}`);
+  }
+}
+
+document.getElementById('login-form').addEventListener('submit', async (evento) => {
+  evento.preventDefault();
+
+  const boton = document.getElementById('login-submit');
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+
+  boton.disabled = true;
+  mostrarErrorLogin('');
+
+  try {
+    const json = await pedirJSON('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+
+    document.getElementById('login-password').value = '';
+    await entrarApp(json.data.usuario);
+  } catch (fallo) {
+    mostrarErrorLogin(fallo.message);
+  } finally {
+    boton.disabled = false;
+  }
+});
+
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  const boton = document.getElementById('btn-logout');
+  boton.disabled = true;
+
+  try {
+    await pedirJSON('/auth/logout', { method: 'POST' });
+  } catch {
+    // Aunque falle la red, cerramos la vista local.
+  } finally {
+    boton.disabled = false;
+    mostrarLogin();
+  }
+});
+
 // ---------- Dashboard ----------
 
 async function cargarDashboard() {
@@ -101,6 +205,11 @@ async function cargarDashboard() {
     actualizarCasos(json.data.casos_activos);
     actualizarGraficos(json.data);
   } catch (fallo) {
+    if (fallo.status === 401) {
+      mostrarLogin('Tu sesión expiró. Volvé a ingresar.');
+      return;
+    }
+
     marcarConexion(false);
 
     if (!ui.avisoRedMostrado) {
@@ -535,23 +644,17 @@ function actualizarGraficos(data) {
 
 // ---------- Arranque ----------
 
-marcarConexion(false);
-ajustarEcg();
-prellenarEcg();
-dibujarEcg();
-dibujarDonut();
-dibujarBarras();
-requestAnimationFrame(bucleEcg);
-
 let temporizadorResize;
 window.addEventListener('resize', () => {
   clearTimeout(temporizadorResize);
   temporizadorResize = setTimeout(() => {
+    if (document.getElementById('app-shell').hidden) return;
     ajustarEcg();
     dibujarDonut();
     dibujarBarras();
   }, 150);
 });
 
-cargarDashboard();
-setInterval(cargarDashboard, 5000);
+requestAnimationFrame(bucleEcg);
+mostrarLogin();
+iniciarSesion();
