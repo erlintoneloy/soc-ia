@@ -15,6 +15,12 @@ const app = {
   cargandoLogs: false,
 };
 
+const explorador = {
+  anterior: null,
+  cargando: false,
+  pagina: 0,
+};
+
 // ---------- Utilidades ----------
 
 function escapeHtml(valor) {
@@ -167,6 +173,7 @@ function mostrarLogin(mensaje = '') {
   }
   app.logSeq = 0;
   app.cargandoLogs = false;
+  cerrarExplorador();
 
   document.getElementById('app-shell').hidden = true;
   document.getElementById('login-screen').hidden = false;
@@ -181,6 +188,7 @@ async function entrarApp(usuario) {
   document.getElementById('app-shell').hidden = false;
   document.getElementById('user-chip').innerHTML = `<b>${escapeHtml(usuario.nombre)}</b> · ${escapeHtml(usuario.rol)}`;
   document.getElementById('btn-reset').hidden = usuario.rol !== 'admin';
+  cerrarExplorador();
 
   mostrarErrorLogin('');
   marcarConexion(true);
@@ -779,6 +787,133 @@ function actualizarGraficos(data) {
   dibujarDonut();
   dibujarBarras();
 }
+
+// ---------- Explorador de logs ----------
+
+function abrirExplorador() {
+  document.getElementById('log-explorer').hidden = false;
+  buscarLogsExplorador({ reiniciar: true });
+}
+
+function cerrarExplorador() {
+  const modal = document.getElementById('log-explorer');
+  if (modal) modal.hidden = true;
+}
+
+function filtrosExplorador() {
+  const params = new URLSearchParams();
+  const fuente = document.getElementById('f-fuente').value;
+  const resultado = document.getElementById('f-resultado').value;
+  const host = document.getElementById('f-host').value.trim();
+  const usuario = document.getElementById('f-usuario').value.trim();
+  const q = document.getElementById('f-q').value.trim();
+  const desde = document.getElementById('f-desde').value;
+  const hasta = document.getElementById('f-hasta').value;
+
+  if (fuente) params.set('fuente', fuente);
+  if (resultado) params.set('resultado', resultado);
+  if (host) params.set('host', host);
+  if (usuario) params.set('usuario', usuario);
+  if (q) params.set('q', q);
+  if (desde) params.set('desde', new Date(desde).toISOString());
+  if (hasta) params.set('hasta', new Date(new Date(hasta).getTime() + 59999).toISOString());
+
+  return params;
+}
+
+function formatearHoraLog(valor) {
+  return new Date(valor).toLocaleString('es-AR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function renderizarExplorador(logs) {
+  const cuerpo = document.getElementById('log-table-body');
+  const vacio = document.getElementById('log-explorer-empty');
+  const cuenta = document.getElementById('log-explorer-count');
+
+  cuerpo.innerHTML = logs
+    .map(
+      (log) => `
+        <tr>
+            <td class="mono">${escapeHtml(formatearHoraLog(log.timestamp))}</td>
+            <td>${escapeHtml(String(log.fuente).toUpperCase())}</td>
+            <td>${escapeHtml(log.tipo_evento)}</td>
+            <td class="mono">${escapeHtml(log.host || log.destino_ip || '—')}</td>
+            <td>${escapeHtml(log.usuario || '—')}</td>
+            <td><span class="result-badge ${escapeHtml(log.resultado)}">${escapeHtml(log.resultado)}</span></td>
+        </tr>`
+    )
+    .join('');
+
+  vacio.hidden = logs.length > 0;
+  cuenta.textContent = logs.length ? `${logs.length} log${logs.length === 1 ? '' : 's'}` : '';
+
+  document.getElementById('btn-older').disabled = !explorador.anterior;
+  document.getElementById('btn-newer').disabled = explorador.pagina === 0;
+}
+
+async function buscarLogsExplorador({ reiniciar = true, antes = null } = {}) {
+  if (explorador.cargando) return;
+  explorador.cargando = true;
+
+  const params = filtrosExplorador();
+  params.set('sentido', 'desc');
+  params.set('limit', '50');
+  if (!reiniciar && antes) params.set('before', String(antes));
+
+  try {
+    const json = await pedirJSON(`/logs?${params.toString()}`);
+    explorador.anterior = json.data.anterior;
+    explorador.pagina = reiniciar ? 0 : explorador.pagina + 1;
+    renderizarExplorador(json.data.logs);
+  } catch (fallo) {
+    if (fallo.status === 401) mostrarLogin('Tu sesión expiró. Volvé a ingresar.');
+    else mostrarAviso(`No se pudo cargar el historial: ${fallo.message}`);
+  } finally {
+    explorador.cargando = false;
+  }
+}
+
+document.getElementById('btn-explorer').addEventListener('click', abrirExplorador);
+document.getElementById('btn-close-explorer').addEventListener('click', cerrarExplorador);
+
+document.getElementById('log-filters').addEventListener('submit', (evento) => {
+  evento.preventDefault();
+  buscarLogsExplorador({ reiniciar: true });
+});
+
+document.getElementById('btn-clear-filters').addEventListener('click', () => {
+  document.getElementById('log-filters').reset();
+  explorador.anterior = null;
+  buscarLogsExplorador({ reiniciar: true });
+});
+
+document.getElementById('btn-older').addEventListener('click', () => {
+  if (explorador.anterior) buscarLogsExplorador({ reiniciar: false, antes: explorador.anterior });
+});
+
+document.getElementById('btn-newer').addEventListener('click', () => {
+  explorador.anterior = null;
+  buscarLogsExplorador({ reiniciar: true });
+});
+
+document.getElementById('btn-export-csv').addEventListener('click', () => {
+  const params = filtrosExplorador();
+  params.set('format', 'csv');
+  window.open(`${API_URL}/logs?${params.toString()}`, '_blank');
+});
+
+document.addEventListener('keydown', (evento) => {
+  if (evento.key === 'Escape' && !document.getElementById('log-explorer').hidden) {
+    cerrarExplorador();
+  }
+});
 
 // ---------- Arranque ----------
 
