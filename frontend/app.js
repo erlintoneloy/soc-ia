@@ -299,17 +299,36 @@ function actualizarCasos(casos) {
   }
 
   contenedor.innerHTML = lista
-    .map(
-      (caso) => `
+    .map((caso) => {
+      const activo = caso.activo;
+      const bloqueActivo = activo
+        ? `<div class="case-asset">
+                <span class="asset-host">${escapeHtml(activo.hostname)}</span>
+                <span class="asset-detail">${escapeHtml(activo.departamento || 'sin área')} · ${escapeHtml(activo.servicio || 'sin servicio')}</span>
+                <span class="asset-crit ${escapeHtml(activo.criticidad)}">${escapeHtml(activo.criticidad).toUpperCase()}</span>
+            </div>`
+        : '<div class="case-asset desconocido">Activo desconocido</div>';
+
+      const evidencia = [];
+      if (caso.usuario_afectado) evidencia.push(`Usuario: ${caso.usuario_afectado}`);
+      if (caso.ip_origen) evidencia.push(`Origen: ${caso.ip_origen}`);
+      const bloqueEvidencia = evidencia.length
+        ? `<div class="case-evidence">${evidencia.map((item) => escapeHtml(item)).join(' · ')}</div>`
+        : '';
+
+      return `
         <div class="case-card ${caso.severidad === 'critica' ? 'critico' : ''}">
             <div class="case-header">
                 <span class="case-title">${escapeHtml(caso.titulo)}</span>
                 <span class="case-meta">
                     ${Number(caso.ocurrencias) > 1 ? `<span class="case-repeats" title="Repeticiones del mismo ataque">×${Number(caso.ocurrencias)}</span>` : ''}
+                    ${caso.prioridad ? `<span class="priority ${escapeHtml(caso.prioridad.toLowerCase())}">${escapeHtml(caso.prioridad)}</span>` : ''}
                     <span class="badge ${escapeHtml(caso.severidad)}">${escapeHtml(caso.severidad).toUpperCase()}</span>
                 </span>
             </div>
             <div class="case-agent">Agente: ${escapeHtml(caso.agente_responsable)}</div>
+            ${bloqueActivo}
+            ${bloqueEvidencia}
             <div class="case-ia">
                 <strong>🤖 IA:</strong> ${escapeHtml(caso.resumen_ia || 'Analizando...')}
                 ${caso.resumen_fuente === 'fallback' ? '<span class="case-tag">respaldo</span>' : ''}<br>
@@ -319,8 +338,8 @@ function actualizarCasos(casos) {
                 <button class="btn-action btn-approve" data-case-id="${escapeHtml(caso.id)}" data-estado="contenido">✅ Aprobar Contención</button>
                 <button class="btn-action btn-ignore" data-case-id="${escapeHtml(caso.id)}" data-estado="falso_positivo">❌ Falso Positivo</button>
             </div>
-        </div>`
-    )
+        </div>`;
+    })
     .join('');
 
   contenedor.querySelectorAll('button[data-case-id]').forEach((boton) => {
