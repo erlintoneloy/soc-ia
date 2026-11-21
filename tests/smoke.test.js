@@ -181,6 +181,40 @@ describe('SOC-IA smoke test', () => {
     assert.equal(caso.agente_responsable, 'Agente Endpoint');
   });
 
+  it('expone métricas consistentes para los gráficos', async () => {
+    const data = await dashboard();
+    const metricas = data.metricas;
+
+    assert.ok(metricas, 'El dashboard debe incluir metricas');
+    assert.ok(Array.isArray(metricas.ataques_por_tipo));
+    assert.equal(metricas.agentes.length, 3);
+
+    for (const agente of metricas.agentes) {
+      assert.equal(typeof agente.escalados, 'number');
+      assert.equal(typeof agente.atendidos, 'number');
+      assert.equal(typeof agente.activos, 'number');
+      assert.equal(
+        agente.escalados,
+        agente.atendidos + agente.activos,
+        `${agente.nombre}: escalados debe ser igual a atendidos + activos`
+      );
+    }
+
+    const totalTipo = metricas.ataques_por_tipo.reduce((suma, item) => suma + item.total, 0);
+    const totalAgentes = metricas.agentes.reduce((suma, item) => suma + item.escalados, 0);
+
+    assert.equal(totalTipo, totalAgentes, 'La torta debe sumar el mismo total que los agentes');
+
+    if (data.casos_activos.length < 100) {
+      for (const agente of metricas.agentes) {
+        const activos = data.casos_activos.filter(
+          (caso) => caso.agente_responsable === `Agente ${agente.nombre}`
+        ).length;
+        assert.equal(agente.activos, activos, `${agente.nombre}: activos no coincide con la cola`);
+      }
+    }
+  });
+
   it('calcula la salud con la fórmula del SPEC', async () => {
     const data = await dashboard();
     const activos = data.casos_activos;

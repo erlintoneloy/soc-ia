@@ -300,12 +300,41 @@ async function manejarDashboard(env) {
   const { results: agentes } = await env.DB.prepare(`SELECT * FROM agentes_estado ORDER BY nombre`).all();
   const salud = await env.DB.prepare(`SELECT salud_porcentaje FROM sistema_salud WHERE id = 1`).first();
 
+  // Métricas derivadas de la tabla `casos`: única fuente de verdad para no descuadrar
+  // los contadores con la cola de casos activos.
+  const { results: porAgente } = await env.DB.prepare(
+    `SELECT agente_responsable,
+            COUNT(*) AS escalados,
+            SUM(CASE WHEN estado IN ('contenido', 'falso_positivo') THEN 1 ELSE 0 END) AS atendidos,
+            SUM(CASE WHEN estado IN ${ESTADOS_ACTIVOS} THEN 1 ELSE 0 END) AS activos
+       FROM casos
+      GROUP BY agente_responsable`
+  ).all();
+
+  const { results: porTipo } = await env.DB.prepare(
+    `SELECT titulo, COUNT(*) AS total FROM casos GROUP BY titulo ORDER BY total DESC`
+  ).all();
+
+  const metricasPorAgente = Object.values(AGENTE_POR_FUENTE).map((nombre) => {
+    const fila = porAgente.find((item) => item.agente_responsable === `Agente ${nombre}`) ?? {};
+    return {
+      nombre,
+      escalados: Number(fila.escalados) || 0,
+      atendidos: Number(fila.atendidos) || 0,
+      activos: Number(fila.activos) || 0,
+    };
+  });
+
   return json({
     ok: true,
     data: {
       salud_sistema: salud ? salud.salud_porcentaje : await recalcularSalud(env),
       casos_activos: casos,
       agentes,
+      metricas: {
+        ataques_por_tipo: porTipo.map((fila) => ({ titulo: fila.titulo, total: Number(fila.total) || 0 })),
+        agentes: metricasPorAgente,
+      },
     },
   });
 }
