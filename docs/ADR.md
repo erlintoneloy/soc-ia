@@ -39,3 +39,17 @@
 *   **Consecuencias:**
     *   Pros: la cuota de IA queda acotada por lote; un ataque repetido se ve como uno solo con `×N`; el presentador puede dejar el SOC limpio antes de la demo sin tocar la CLI.
     *   Contras: el rate limit vive en D1 y agrega una escritura por ingesta; el cooldown de 60 s puede ocultar oleadas legítimas del mismo ataque (se ve en `ocurrencias`); el reset borra la evidencia histórica, por lo que no debe usarse en producción real.
+
+## ADR-04: Inventario de activos y prioridad por criticidad
+*   **Fecha:** 2026-11-21
+*   **Contexto:** Los casos decían "escaneo de puertos" sin indicar qué activo estaba afectado, de qué área dependía ni cuánto importaba. El analista no podía priorizar y la IA recomendaba en abstracto. Además, el mismo ataque en dos equipos distintos se deduplicaba por usuario/IP y podía colapsar en un solo caso.
+*   **Decisión:**
+    *   Sembrar un inventario ficticio (**Clínica Valle Verde**) de 18 activos con hostname, IP, tipo, área, responsable, servicio, criticidad y SO.
+    *   Resolver el activo por `host` y, si falta, por `destino_ip`, con caché por request. Sin coincidencia → `activo_id = NULL` y la UI muestra "activo desconocido".
+    *   Guardar en cada caso `activo_id`, `tipo_evento`, `ip_origen`, `usuario_afectado` y `evidencia_json` (500 caracteres máximo).
+    *   Calcular prioridad como `severidad × criticidad` (P1/P2/P3) sin tocar la fórmula de salud del SPEC.
+    *   Incluir el activo afectado en la clave de deduplicación, para que dos equipos distintos generen dos casos.
+    *   Pasar el contexto del activo al prompt de Workers AI.
+*   **Consecuencias:**
+    *   Pros: los casos tienen impacto de negocio y evidencia; la prioridad permite triage real; las recomendaciones de la IA son específicas; el dedupe distingue por activo.
+    *   Contras: una consulta extra por host nuevo en cada lote (mitigada con caché); el inventario es estático y hay que mantenerlo; los logs sin `host` ni `destino_ip` quedan como desconocidos. La prioridad no afecta la salud, así que un activo crítico con severidad alta puede dejar la barra en verde aunque sea P1: es una decisión consciente para preservar CA4.

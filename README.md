@@ -45,7 +45,7 @@ npm run dev                   # dashboard + API en http://127.0.0.1:8787
 Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
-npm run test:smoke     # 23 pruebas end-to-end (incluye autenticación)
+npm run test:smoke     # 26 pruebas end-to-end (incluye autenticación)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
@@ -69,6 +69,14 @@ npm run sim -- --scenario mixto --logs 20 --rate 10
 - **Tope de IA:** máximo 3 inferencias por lote. El resto de los casos se crea igual, pero con resumen de respaldo, marcado como `respaldo` en la UI.
 - **Reset de demo:** botón visible solo para `admin` (o `POST /api/demo/reset`), que borra los casos, reinicia contadores y deja la salud en 100%.
 
+## Contexto de activos
+
+El inventario simula una organización ficticia (**Clínica Valle Verde**): 18 activos con hostname, IP, área, servicio y criticidad. Cada caso guarda el activo afectado, el usuario, la IP de origen y una evidencia acotada (máx. 500 caracteres).
+
+- Los logs aceptan `host` (preferido) y `destino_ip` para identificar el activo, e `ip_origen` para el atacante.
+- Si no hay coincidencia en el inventario, el caso se marca como **activo desconocido**.
+- La prioridad combina severidad y criticidad del activo: **P1** (≥12), **P2** (≥6), **P3** (<6). Es independiente de la salud, que sigue la fórmula del SPEC.
+
 ## Despliegue
 
 ```powershell
@@ -78,6 +86,8 @@ npm run deploy           # assets + API en un solo Worker
 
 > Si la base ya existía antes de la Fase 2, aplicá la migración una sola vez:
 > `npm run db:migrate` (local) o `npm run db:migrate:remote` (remoto).
+> Para el inventario de activos: `npm run db:migrate:activos` y
+> `npm run db:migrate:activos:remote`.
 
 El proyecto completo está configurado en `wrangler.jsonc` (`main`, `assets`, D1 y AI).
 El código del Worker vive en `worker/` y el frontend en `frontend/`.
