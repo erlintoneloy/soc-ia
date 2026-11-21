@@ -109,6 +109,18 @@ async function idsActivos() {
   return new Set(data.casos_activos.map((caso) => caso.id));
 }
 
+async function ultimoSeq() {
+  const { status, json } = await api('/api/logs?after=0&limit=1');
+  assert.equal(status, 200, 'GET /api/logs debe responder HTTP 200');
+  return json.data.logs.length ? json.data.logs[0].seq : 0;
+}
+
+async function logsDesde(seq, limit = 50) {
+  const { status, json } = await api(`/api/logs?after=${seq}&limit=${limit}`);
+  assert.equal(status, 200, 'GET /api/logs debe responder HTTP 200');
+  return json.data.logs;
+}
+
 async function nuevoCasoDesde(idsPrevios, log, { timeout = AI_TIMEOUT_MS } = {}) {
   const { status, json } = await api('/api/stream', {
     method: 'POST',
@@ -196,6 +208,10 @@ describe('SOC-IA smoke test', () => {
     assert.equal(status, 401);
     assert.equal(json.ok, false);
     assert.equal(json.code, 'NO_AUTENTICADO');
+
+    const logs = await api('/api/logs', { guardarCookie: false });
+    assert.equal(logs.status, 401);
+    assert.equal(logs.json.code, 'NO_AUTENTICADO');
   });
 
   it('rechaza la ingesta de logs sin sesión', async () => {
@@ -272,12 +288,15 @@ describe('SOC-IA smoke test', () => {
 
   it('descarta un log de ruido y actualiza las métricas del agente', async () => {
     const antes = await agente('Identidad');
+    const seqAntes = await ultimoSeq();
 
     const log = {
       fuente: 'identidad',
       tipo_evento: 'login_exitoso',
       usuario: `smoke_${RUN_ID}`,
-      ip: '10.255.255.1',
+      host: 'WS-ADM-11',
+      destino_ip: '10.20.40.11',
+      ip_origen: '10.255.255.1',
     };
 
     const { status, json } = await api('/api/stream', {
@@ -298,11 +317,19 @@ describe('SOC-IA smoke test', () => {
     assert.equal(despues.logs_procesados, antes.logs_procesados + 1, 'logs_procesados debe subir en 1');
     assert.equal(despues.logs_bloqueados, antes.logs_bloqueados + 1, 'logs_bloqueados debe subir en 1');
     assert.equal(despues.casos_escalados, antes.casos_escalados, 'un log filtrado no debe escalar');
+
+    const filas = await logsDesde(seqAntes);
+    const fila = filas.find((item) => item.tipo_evento === 'login_exitoso');
+    assert.ok(fila, 'El log debe persistirse');
+    assert.equal(fila.fuente, 'identidad');
+    assert.equal(fila.resultado, 'descartado');
+    assert.equal(fila.host, 'WS-ADM-11');
   });
 
   it('escala una fuerza bruta como severidad alta y deja al agente en alerta', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
     const idsPrevios = await idsActivos();
     const antes = await agente('Identidad');
+    const seqAntes = await ultimoSeq();
 
     const caso = await nuevoCasoDesde(idsPrevios, {
       fuente: 'identidad',
@@ -328,11 +355,16 @@ describe('SOC-IA smoke test', () => {
     assert.equal(despues.casos_escalados, antes.casos_escalados + 1);
     assert.equal(despues.estado, 'alerta');
 
+    const filas = await logsDesde(seqAntes);
+    const filaEscalada = filas.find((item) => item.resultado === 'escalado' && item.host === 'WS-FAC-05');
+    assert.ok(filaEscalada, 'El log escalado debe persistirse');
+
     casoFuerzaBruta = caso.id;
   });
 
   it('no duplica casos del mismo ataque dentro del cooldown', async () => {
     const idsAntes = await idsActivos();
+    const seqAntes = await ultimoSeq();
 
     const log = {
       fuente: 'identidad',
@@ -361,6 +393,13 @@ describe('SOC-IA smoke test', () => {
     const caso = data.casos_activos.find((item) => item.id === casoFuerzaBruta);
     assert.ok(caso, 'El caso original debe seguir activo');
     assert.ok(Number(caso.ocurrencias) >= 3, 'Las ocurrencias deben acumularse');
+
+    const filas = await logsDesde(seqAntes);
+    assert.equal(
+      filas.filter((item) => item.resultado === 'duplicado').length,
+      2,
+      'Los logs duplicados deben persistirse como tales'
+    );
   });
 
   it('escala PowerShell ofuscado como severidad crítica', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
@@ -536,6 +575,26 @@ describe('SOC-IA smoke test', () => {
     for (const caso of nuevos) casosCreados.push(caso.id);
   });
 
+  it('pagina los logs con un cursor incremental', async () => {
+    const { status, json } = await api('/api/logs?after=0&limit=1');
+    assert.equal(status, 200);
+    const seq = json.data.siguiente;
+
+    const stream = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({
+        logs: [{ fuente: 'red', tipo_evento: 'request_normal', host: 'SRV-WEB-01', destino_ip: '10.20.80.18' }],
+      }),
+    });
+    assert.equal(stream.status, 200);
+
+    const { json: pagina } = await api(`/api/logs?after=${seq}&limit=10`);
+    assert.equal(pagina.data.logs.length, 1);
+    assert.equal(pagina.data.logs[0].resultado, 'descartado');
+    assert.equal(pagina.data.logs[0].host, 'SRV-WEB-01');
+    assert.ok(pagina.data.siguiente > seq);
+  });
+
   it('expone métricas consistentes para los gráficos', async () => {
     const data = await dashboard();
     const metricas = data.metricas;
@@ -707,6 +766,9 @@ describe('SOC-IA smoke test', () => {
       assert.equal(agente.estado, 'activo');
       assert.equal(agente.logs_procesados, 0);
     }
+
+    const logs = await logsDesde(0);
+    assert.equal(logs.length, 0, 'El reset debe borrar los logs');
   });
 
   it('invalida la sesión al cerrar sesión', async () => {

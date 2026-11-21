@@ -17,7 +17,9 @@ agentes, la salud inicial y los usuarios de demo. Es idempotente (`INSERT OR IGN
 > Si ya tenías un estado local viejo, `npm run db:reset` lo borra y después
 > volvés a ejecutar `npm run db:init`. Si la base existía antes de la Fase 2,
 > aplicá `npm run db:migrate` una sola vez. Para el inventario de activos:
-> `npm run db:migrate:activos`.
+> `npm run db:migrate:activos`. Para el directorio de usuarios:
+> `npm run db:migrate:usuarios`. Para los logs de la Fase 4:
+> `npm run db:migrate:logs`.
 
 ## 2. Levantar el Worker
 
@@ -80,6 +82,10 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Un caso por cada activo afectado | `POST /api/stream` |
 | Perfil de usuario incluido en el caso | `GET /api/dashboard` |
 | Usuario fuera del directorio → sin perfil | `POST /api/stream` |
+| Logs sin sesión → 401 | `GET /api/logs` |
+| Persistencia del log con su resultado | `POST /api/stream` + `GET /api/logs` |
+| Cursor incremental de logs | `GET /api/logs` |
+| El reset borra los logs | `POST /api/demo/reset` |
 | Métricas consistentes para los gráficos | `GET /api/dashboard` |
 | Salud según `100 - 20·críticas - 10·altas` | `GET /api/dashboard` |
 | Resolución con `nuevo_estado` y salud | `PATCH /api/cases/:id` |
