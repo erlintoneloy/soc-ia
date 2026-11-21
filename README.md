@@ -8,53 +8,70 @@ una recomendación generados por Workers AI.
 
 | Recurso | URL |
 |---|---|
-| Dashboard | https://soc-ia.hackaton.workers.dev |
-| Worker (API) | https://soc-ia-worker.hackaton.workers.dev |
-| Health check | https://soc-ia-worker.hackaton.workers.dev/api/health |
+| Dashboard + API | https://soc-ia.hackaton.workers.dev |
+| Health check | https://soc-ia.hackaton.workers.dev/api/health |
 
-El frontend apunta al Worker mediante `window.SOC_API_URL` (definido en `frontend/index.html`
-solo para hosts distintos de `localhost`).
+El frontend y la API comparten origen: un solo Worker sirve los assets y las rutas `/api/*`.
+La sesión se guarda en una cookie `HttpOnly`, por lo que no hay CORS.
+
+### Credenciales de demo
+
+| Rol | Email | Contraseña |
+|---|---|---|
+| Analista | `analista@soc-ia.demo` | `SocIA2026!` |
+| Admin | `admin@soc-ia.demo` | `AdminSocIA2026!` |
+
+> Cambiar estas credenciales en un entorno real. Se siembran desde `worker/seed.sql`.
 
 ## Stack
 
 - **Backend:** Cloudflare Workers (ES Modules).
 - **Base de datos:** Cloudflare D1 (SQLite serverless).
 - **IA:** Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct-fast`) con fallback.
-- **Frontend:** Vanilla JS servido como assets estáticos de Workers.
+- **Frontend:** Vanilla JS servido como assets estáticos del mismo Worker.
 
 ## Desarrollo local
 
 ```powershell
 npm install
-npm run db:init                      # schema + seed en la D1 local
-cd worker; npx wrangler dev          # API en http://127.0.0.1:8787
+npm run db:init        # schema + seed en la D1 local
+npm run dev            # dashboard + API en http://127.0.0.1:8787
 ```
 
-Abrir `frontend/index.html` (o servirlo con cualquier servidor estático). En `localhost`
-el dashboard usa `http://127.0.0.1:8787/api`.
+Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
-npm run test:smoke                   # 10 pruebas end-to-end contra el Worker local
+npm run test:smoke     # 18 pruebas end-to-end (incluye autenticación)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
-Detalles de las pruebas en [`tests/README.md`](tests/README.md).
+> El simulador inicia sesión automáticamente con las credenciales de demo antes
+> de enviar los lotes. Se pueden cambiar con `--email` / `--password`.
+> Ver [`tests/README.md`](tests/README.md) para el flujo completo.
+
+## Autenticación
+
+- `POST /api/auth/login` → cookie `soc_sid` (HttpOnly, SameSite=Lax, 8 h).
+- `POST /api/auth/logout` → invalida la sesión.
+- `GET /api/auth/me` → usuario actual.
+- PBKDF2-SHA256 con salt por usuario; en D1 solo se guarda el SHA-256 del token de sesión.
+- Rate limit: 5 fallos por IP+email → bloqueo de 15 minutos.
+- Todo `/api/*` exige sesión, salvo `/api/health` y el login.
 
 ## Despliegue
 
 ```powershell
-npm run db:init:remote      # schema + seed en la D1 remota (idempotente)
-npm run deploy:worker       # Worker https://soc-ia-worker.<subdominio>.workers.dev
-npm run deploy              # frontend https://soc-ia.<subdominio>.workers.dev
+npm run db:init:remote   # schema + seed en la D1 remota (idempotente)
+npm run deploy           # assets + API en un solo Worker
 ```
 
-El proyecto de frontend está configurado en `wrangler.jsonc` (`assets.directory: frontend`),
-con `404.html` como página de error. El Worker vive en `worker/` con su propio `wrangler.toml`.
+El proyecto completo está configurado en `wrangler.jsonc` (`main`, `assets`, D1 y AI).
+El código del Worker vive en `worker/` y el frontend en `frontend/`.
 
 Smoke test contra producción:
 
 ```powershell
-$env:SOC_IA_URL='https://soc-ia-worker.hackaton.workers.dev'
+$env:SOC_IA_URL='https://soc-ia.hackaton.workers.dev'
 npm run test:smoke
 ```
 

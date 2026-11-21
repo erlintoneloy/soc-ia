@@ -49,10 +49,14 @@ Opciones:
   --scenario <nombre>  ${SCENARIOS.join(' | ')} (default: mixto)
   --dry-run            Genera y muestra los logs sin enviarlos
   --quiet              No imprime cada log, solo el resumen
+  --email <email>      Usuario para autenticarse (default: analista@soc-ia.demo)
+  --password <clave>   Contraseña del usuario (default: SocIA2026!)
   -h, --help           Muestra esta ayuda
 
 Variables de entorno:
   SOC_IA_URL           URL base del Worker (equivale a --url)
+  SOC_IA_EMAIL         Usuario para autenticarse
+  SOC_IA_PASSWORD      Contraseña del usuario
   NO_COLOR             Desactiva los colores de la salida
 `);
 }
@@ -65,7 +69,16 @@ function parseIntInRange(raw, flag, { min, max }) {
 }
 
 function parseArgs(argv) {
-  const opts = { url: DEFAULT_URL, logs: 20, rate: 10, scenario: 'mixto', dryRun: false, quiet: false };
+  const opts = {
+    url: DEFAULT_URL,
+    logs: 20,
+    rate: 10,
+    scenario: 'mixto',
+    dryRun: false,
+    quiet: false,
+    email: process.env.SOC_IA_EMAIL || 'analista@soc-ia.demo',
+    password: process.env.SOC_IA_PASSWORD || 'SocIA2026!',
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const [flag, inlineValue] = argv[i].split('=');
@@ -100,6 +113,12 @@ function parseArgs(argv) {
         break;
       case '--quiet':
         opts.quiet = true;
+        break;
+      case '--email':
+        opts.email = takeValue();
+        break;
+      case '--password':
+        opts.password = takeValue();
         break;
       case '-h':
       case '--help':
@@ -204,13 +223,58 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function postLogs(url, logs) {
+async function iniciarSesion(url, email, password) {
+  let response;
+
+  try {
+    response = await fetch(`${url}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (error) {
+    console.error(`\n${paint('red', 'No se pudo conectar al Worker:')} ${error.message}`);
+    console.error(`Verifica que "npm run dev" esté corriendo y que la URL sea ${url}\n`);
+    process.exit(1);
+  }
+
+  const texto = await response.text();
+  let json = null;
+
+  try {
+    json = JSON.parse(texto);
+  } catch {
+    json = null;
+  }
+
+  if (!response.ok || !json?.ok) {
+    console.error(
+      `\n${paint('red', `No se pudo iniciar sesión como ${email}:`)} ${json?.error || `HTTP ${response.status}`}`
+    );
+    console.error('Pasá --email y --password (o SOC_IA_EMAIL / SOC_IA_PASSWORD).\n');
+    process.exit(1);
+  }
+
+  const setCookies =
+    typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+  const cookie = setCookies.map((cabecera) => cabecera.split(';')[0]).find((par) => par.startsWith('soc_sid='));
+
+  if (!cookie) {
+    console.error(`\n${paint('red', 'El login no devolvió la cookie de sesión.')}\n`);
+    process.exit(1);
+  }
+
+  return { cookie, usuario: json.data.usuario };
+}
+
+async function postLogs(url, logs, cookie) {
   let response;
 
   try {
     response = await fetch(`${url}/api/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
       body: JSON.stringify({ logs }),
       signal: AbortSignal.timeout(30000),
     });
@@ -252,6 +316,9 @@ async function main() {
     return;
   }
 
+  const { cookie, usuario } = await iniciarSesion(opts.url, opts.email, opts.password);
+  console.log(`${paint('green', 'Sesión iniciada como')} ${usuario.nombre} (${usuario.rol})\n`);
+
   const totals = { procesados: 0, escalados: 0, descartados: 0 };
   const startedAt = Date.now();
   const batchSize = opts.rate > 0 ? Math.min(BATCH_SIZE, Math.max(1, Math.ceil(opts.rate))) : BATCH_SIZE;
@@ -265,7 +332,7 @@ async function main() {
       for (const item of batch) console.log(`  ${paint('dim', new Date().toLocaleTimeString())}  ${describeLog(item)}`);
     }
 
-    const data = await postLogs(opts.url, batch.map((item) => item.log));
+    const data = await postLogs(opts.url, batch.map((item) => item.log), cookie);
     sent += batch.length;
     totals.procesados += data.procesados ?? 0;
     totals.escalados += data.escalados ?? 0;

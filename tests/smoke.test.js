@@ -25,12 +25,31 @@ const AI_TIMEOUT_MS = 30000;
 const casosCreados = [];
 let casoFuerzaBruta = null;
 
-async function api(path, { timeout = REQUEST_TIMEOUT_MS, ...options } = {}) {
+/** Cookie de sesión de la corrida. Node `fetch` no guarda cookies automáticamente. */
+let cookie = '';
+
+function actualizarCookie(response) {
+  const setCookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+  for (const cabecera of setCookies) {
+    const [par] = cabecera.split(';');
+    if (par.startsWith('soc_sid=')) cookie = par;
+  }
+}
+
+async function api(path, { timeout = REQUEST_TIMEOUT_MS, headers = {}, cookie: cookieManual, guardarCookie = true, ...options } = {}) {
+  const cookieEnviada = cookieManual !== undefined ? cookieManual : cookie;
+
   const response = await fetch(`${BASE_URL}${path}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(cookieEnviada ? { Cookie: cookieEnviada } : {}),
+      ...headers,
+    },
     signal: AbortSignal.timeout(timeout),
   });
+
+  if (guardarCookie) actualizarCookie(response);
 
   const text = await response.text();
   let json = null;
@@ -119,6 +138,86 @@ describe('SOC-IA smoke test', () => {
 
     assert.equal(json.data.database, 'D1 Conectada', 'D1 no está conectada: revisa el binding DB y la migración local');
     assert.match(json.data.status, /operativo/i);
+  });
+
+  it('rechaza el dashboard sin sesión', async () => {
+    const { status, json } = await api('/api/dashboard', { guardarCookie: false });
+
+    assert.equal(status, 401);
+    assert.equal(json.ok, false);
+    assert.equal(json.code, 'NO_AUTENTICADO');
+  });
+
+  it('rechaza la ingesta de logs sin sesión', async () => {
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      guardarCookie: false,
+      body: JSON.stringify({ logs: [{ fuente: 'red', tipo_evento: 'escaneo_puertos' }] }),
+    });
+
+    assert.equal(status, 401);
+    assert.equal(json.code, 'NO_AUTENTICADO');
+  });
+
+  it('rechaza credenciales incorrectas con un mensaje genérico', async () => {
+    const { status, json } = await api('/api/auth/login', {
+      method: 'POST',
+      guardarCookie: false,
+      body: JSON.stringify({ email: 'analista@soc-ia.demo', password: 'incorrecta123' }),
+    });
+
+    assert.equal(status, 401);
+    assert.equal(json.code, 'CREDENCIALES');
+    assert.match(json.error, /incorrectos/i);
+  });
+
+  it('permite el login con las credenciales de demo', async () => {
+    const { status, json } = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'analista@soc-ia.demo', password: 'SocIA2026!' }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.ok, true);
+    assert.equal(json.data.usuario.email, 'analista@soc-ia.demo');
+    assert.equal(json.data.usuario.rol, 'analista');
+    assert.ok(cookie.startsWith('soc_sid='), 'El login debe setear la cookie de sesión');
+
+    const me = await api('/api/auth/me');
+    assert.equal(me.status, 200);
+    assert.equal(me.json.data.usuario.email, 'analista@soc-ia.demo');
+  });
+
+  it('bloquea tras 5 intentos fallidos', { timeout: 60000 }, async () => {
+    const email = `bloqueo_${RUN_ID}@soc-ia.demo`;
+
+    for (let intento = 0; intento < 5; intento++) {
+      const { status } = await api('/api/auth/login', {
+        method: 'POST',
+        guardarCookie: false,
+        body: JSON.stringify({ email, password: 'incorrecta123' }),
+      });
+      assert.equal(status, 401, `El intento ${intento + 1} debía fallar`);
+    }
+
+    const bloqueado = await api('/api/auth/login', {
+      method: 'POST',
+      guardarCookie: false,
+      body: JSON.stringify({ email, password: 'incorrecta123' }),
+    });
+
+    assert.equal(bloqueado.status, 429);
+    assert.equal(bloqueado.json.code, 'DEMASIADOS_INTENTOS');
+  });
+
+  it('rechaza una cookie de sesión inválida', async () => {
+    const { status, json } = await api('/api/auth/me', {
+      cookie: 'soc_sid=invalido',
+      guardarCookie: false,
+    });
+
+    assert.equal(status, 401);
+    assert.equal(json.code, 'NO_AUTENTICADO');
   });
 
   it('descarta un log de ruido y actualiza las métricas del agente', async () => {
@@ -297,5 +396,20 @@ describe('SOC-IA smoke test', () => {
     assert.equal(json.ok, false);
     assert.equal(json.code, 'VALIDACION');
     assert.match(json.error, /fuente/i);
+  });
+
+  it('invalida la sesión al cerrar sesión', async () => {
+    const salida = await api('/api/auth/logout', { method: 'POST' });
+    assert.equal(salida.status, 200);
+
+    const me = await api('/api/auth/me');
+    assert.equal(me.status, 401);
+
+    // Restaurar la sesión para que la limpieza final pueda resolver los casos.
+    const login = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: 'analista@soc-ia.demo', password: 'SocIA2026!' }),
+    });
+    assert.equal(login.status, 200);
   });
 });
