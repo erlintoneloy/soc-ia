@@ -18,8 +18,10 @@ La sesión se guarda en una cookie `HttpOnly`, por lo que no hay CORS.
 
 | Rol | Email | Contraseña |
 |---|---|---|
-| Analista | `analista@soc-ia.demo` | `********` |
-| Admin | `admin@soc-ia.demo` | `********` |
+| Analista (hospital) | `analista@soc-ia.demo` | `********` |
+| Admin (hospital) | `admin@soc-ia.demo` | `********` |
+| Analista (banco) | `analista@banco-litoral.demo` | `********` |
+| Admin (banco) | `admin@banco-litoral.demo` | `********` |
 
 > Las contraseñas de las cuentas de demo se comparten fuera del repositorio y
 > se cargan en `tests/.env` (ignorado por git). Copiá `tests/.env.example` a
@@ -46,7 +48,7 @@ Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
 npm run test:unit      # 7 pruebas del motor, sin Worker
-npm run test:smoke     # 34 pruebas end-to-end (incluye autenticación)
+npm run test:smoke     # 35 pruebas end-to-end (incluye autenticación y multi-tenant)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
@@ -99,6 +101,19 @@ El inventario simula una organización ficticia (**Clínica Valle Verde**): 18 a
 El seed incluye **9 usuarios ficticios** (`jefe.finanzas`, `bioq.lab`, `admin.ti`, etc.) con nombre, rol, área y equipo asignado. Cada caso se enlaza por `usuario_afectado` y la API devuelve `usuario_perfil`.
 
 La tarjeta muestra `👤 Juan Pérez (Jefe de Finanzas)`, y el prompt de la IA recibe ese perfil para contextualizar la recomendación. Un usuario fuera del directorio se muestra con su identificador y sin perfil.
+
+## Multi-tenant
+
+La base es compartida y cada organización se aísla con `tenant_id`:
+
+- `clinica-valle-verde` — Clínica Valle Verde (18 activos, 9 usuarios de negocio).
+- `banco-litoral` — Banco Litoral (4 activos, 3 usuarios de negocio).
+
+El usuario autenticado determina el tenant. El dashboard, la consola, el explorador, el reset y
+el triage se filtran por él: un caso o log de otra organización no aparece y responde 404.
+Los agentes y la salud también son por tenant, y el chip del topbar muestra la organización.
+
+Cada tenant tiene su propio admin, que solo puede reiniciar su organización.
 
 ## Logs y consola en vivo
 
@@ -162,4 +177,5 @@ npm run test:smoke
 - [`docs/PRD.md`](docs/PRD.md) — producto y alcance.
 - [`docs/SPEC.md`](docs/SPEC.md) — modelo de datos, contratos y reglas.
 - [`docs/ADR.md`](docs/ADR.md) — decisiones de arquitectura.
+- [`docs/DEMO.md`](docs/DEMO.md) — guion de demo paso a paso.
 - [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) — estándares de trabajo.

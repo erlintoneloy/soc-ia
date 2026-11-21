@@ -104,3 +104,17 @@
 *   **Consecuencias:**
     *   Pros: la detección ya no depende de datos del cliente; el flood se contiene solo; el motor es testeable sin Worker; CI detecta regresiones en cada push/PR.
     *   Contras: una consulta extra por lote para las ventanas; si el insert de logs falla, la ventana queda corta; los umbrales son constantes y no configurables por entorno; la ventana usa el timestamp de ingesta, no un reloj deslizante exacto.
+
+## ADR-09: Multi-tenant con columna `tenant_id`
+*   **Fecha:** 2026-11-21
+*   **Contexto:** El sistema atendía una sola organización. Para mostrar aislamiento real hacía falta que dos organizaciones compartieran la misma base sin poder verse entre sí.
+*   **Decisión:**
+    *   Agregar `tenant_id` a `logs`, `casos`, `usuarios`, `activos`, `agentes_estado`, `usuarios_negocio` y `sistema_salud`.
+    *   Reconstruir las tablas con unicidad por tenant (`activos` por hostname, `agentes_estado` por nombre, `usuarios_negocio` por username, una fila de salud por tenant).
+    *   Derivar el tenant de la sesión (`JOIN tenants` en auth) y filtrar todas las consultas por él.
+    *   Mantener un admin por tenant; el reset solo borra los casos, logs y contadores de esa organización.
+    *   Sembrar dos tenants ficticios: Clínica Valle Verde y Banco Litoral.
+    *   Mostrar la organización en la barra superior y cubrir el aislamiento con un test end-to-end.
+*   **Consecuencias:**
+    *   Pros: aislamiento real de datos, agentes y salud; el mismo despliegue sirve a varias organizaciones; los tests verifican que un tenant no ve ni modifica casos ajenos.
+    *   Contras: cada consulta debe recordar el filtro por tenant (riesgo de olvido al agregar features); no hay un superadmin global; la migración reconstruye cuatro tablas; `rate_limit` e `intentos_login` siguen siendo globales por usuario/IP, no por tenant; sigue siendo una sola base D1 (no hay aislamiento físico).
