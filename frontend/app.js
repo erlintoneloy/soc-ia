@@ -175,6 +175,8 @@ function mostrarLogin(mensaje = '') {
   app.logSeq = 0;
   app.cargandoLogs = false;
   cerrarExplorador();
+  cerrarAuditoria();
+  cerrarConfirmacion();
 
   document.getElementById('app-shell').hidden = true;
   document.getElementById('login-screen').hidden = false;
@@ -191,7 +193,10 @@ async function entrarApp(usuario) {
   document.getElementById('user-chip').innerHTML = `<b>${escapeHtml(usuario.nombre)}</b> · ${escapeHtml(usuario.rol)}`;
   document.getElementById('tenant-chip').textContent = usuario.tenant_nombre || '';
   document.getElementById('btn-reset').hidden = usuario.rol !== 'admin';
+  document.getElementById('btn-audit').hidden = usuario.rol !== 'admin';
   cerrarExplorador();
+  cerrarAuditoria();
+  cerrarConfirmacion();
 
   mostrarErrorLogin('');
   marcarConexion(true);
@@ -413,19 +418,32 @@ function actualizarCasos(casos) {
                 <strong>💡 Recomendación:</strong> ${escapeHtml(caso.recomendacion_ia || 'Pendiente')}
             </div>
             <div class="case-actions">
-                <button class="btn-action btn-approve" data-case-id="${escapeHtml(caso.id)}" data-estado="contenido">✅ Aprobar Contención</button>
-                <button class="btn-action btn-ignore" data-case-id="${escapeHtml(caso.id)}" data-estado="falso_positivo">❌ Falso Positivo</button>
+                <button class="btn-action btn-approve" data-case-id="${escapeHtml(caso.id)}" data-case-title="${escapeHtml(caso.titulo)}" data-estado="contenido">✅ Aprobar Contención</button>
+                <button class="btn-action btn-ignore" data-case-id="${escapeHtml(caso.id)}" data-case-title="${escapeHtml(caso.titulo)}" data-estado="falso_positivo">❌ Falso Positivo</button>
             </div>
         </div>`;
     })
     .join('');
 
   contenedor.querySelectorAll('button[data-case-id]').forEach((boton) => {
-    boton.addEventListener('click', () => resolverCaso(boton.dataset.caseId, boton.dataset.estado, boton));
+    boton.addEventListener('click', () =>
+      resolverCaso(boton.dataset.caseId, boton.dataset.estado, boton, boton.dataset.caseTitle)
+    );
   });
 }
 
-async function resolverCaso(id, nuevoEstado, boton) {
+async function resolverCaso(id, nuevoEstado, boton, titulo) {
+  const esContencion = nuevoEstado === 'contenido';
+
+  pedirConfirmacion({
+    titulo: esContencion ? 'Aprobar contención' : 'Marcar falso positivo',
+    mensaje: `¿Confirmás ${esContencion ? 'aprobar la contención' : 'marcar como falso positivo'} del caso “${titulo || 'seleccionado'}”?`,
+    texto: esContencion ? 'Aprobar contención' : 'Marcar falso positivo',
+    onConfirmar: () => ejecutarResolucion(id, nuevoEstado, boton),
+  });
+}
+
+async function ejecutarResolucion(id, nuevoEstado, boton) {
   if (boton) boton.disabled = true;
 
   try {
@@ -954,10 +972,115 @@ document.getElementById('btn-export-csv').addEventListener('click', () => {
 });
 
 document.addEventListener('keydown', (evento) => {
-  if (evento.key === 'Escape' && !document.getElementById('log-explorer').hidden) {
-    cerrarExplorador();
-  }
+  if (evento.key !== 'Escape') return;
+
+  if (!document.getElementById('log-explorer').hidden) return cerrarExplorador();
+  if (!document.getElementById('audit-modal').hidden) return cerrarAuditoria();
+  if (!document.getElementById('confirm-modal').hidden) return cerrarConfirmacion();
 });
+
+// ---------- Confirmación ----------
+
+let confirmacionPendiente = null;
+
+function pedirConfirmacion({ titulo, mensaje, texto, onConfirmar }) {
+  document.getElementById('confirm-title').textContent = titulo;
+  document.getElementById('confirm-message').textContent = mensaje;
+  document.getElementById('confirm-ok').textContent = texto;
+
+  confirmacionPendiente = onConfirmar;
+  document.getElementById('confirm-modal').hidden = false;
+}
+
+function cerrarConfirmacion() {
+  const modal = document.getElementById('confirm-modal');
+  if (modal) modal.hidden = true;
+  confirmacionPendiente = null;
+}
+
+document.getElementById('confirm-ok').addEventListener('click', async () => {
+  const accion = confirmacionPendiente;
+  cerrarConfirmacion();
+  if (accion) await accion();
+});
+
+document.getElementById('confirm-cancel').addEventListener('click', cerrarConfirmacion);
+document.getElementById('confirm-close').addEventListener('click', cerrarConfirmacion);
+
+// ---------- Auditoría ----------
+
+const ACCIONES_AUDITORIA = {
+  login: 'Inicio de sesión',
+  logout: 'Cierre de sesión',
+  triage: 'Triage de caso',
+  reset: 'Reset de demo',
+  token_creado: 'Token creado',
+  token_revocado: 'Token revocado',
+  simulacion: 'Simulación con token',
+};
+
+function etiquetaAccion(accion) {
+  return ACCIONES_AUDITORIA[accion] || accion;
+}
+
+function resumenDetalle(detalle) {
+  if (!detalle) return '—';
+
+  const partes = [];
+  if (detalle.caso) partes.push(`caso ${String(detalle.caso).slice(0, 8)}…`);
+  if (detalle.estado) partes.push(detalle.estado);
+  if (detalle.casos_eliminados !== undefined) partes.push(`${detalle.casos_eliminados} casos`);
+  if (detalle.token) partes.push(`token ${detalle.token}`);
+  if (detalle.casos_creados !== undefined) partes.push(`${detalle.casos_creados} nuevos`);
+  if (detalle.procesados !== undefined) partes.push(`${detalle.procesados} procesados`);
+  if (detalle.bloqueados) partes.push(`${detalle.bloqueados} bloqueados`);
+  if (detalle.tenant) partes.push(detalle.tenant);
+
+  return partes.length ? partes.join(' · ') : '—';
+}
+
+async function cargarAuditoria() {
+  try {
+    const json = await pedirJSON('/auditoria?limit=100');
+    const filas = json.data.auditoria || [];
+    const cuerpo = document.getElementById('audit-table-body');
+
+    cuerpo.innerHTML = filas
+      .map(
+        (fila) => `
+        <tr>
+            <td class="mono">${escapeHtml(formatearHoraLog(fila.creado_en))}</td>
+            <td>${escapeHtml(fila.usuario_email || 'sistema')}</td>
+            <td>${escapeHtml(etiquetaAccion(fila.accion))}</td>
+            <td>${escapeHtml(resumenDetalle(fila.detalle))}</td>
+            <td class="mono">${escapeHtml(fila.ip || '—')}</td>
+        </tr>`
+      )
+      .join('');
+
+    document.getElementById('audit-empty').hidden = filas.length > 0;
+    document.getElementById('audit-count').textContent = `${filas.length} acción${
+      filas.length === 1 ? '' : 'es'
+    }`;
+  } catch (fallo) {
+    if (fallo.status === 401) mostrarLogin('Tu sesión expiró. Volvé a ingresar.');
+    else mostrarAviso(`No se pudo cargar la auditoría: ${fallo.message}`);
+  }
+}
+
+function abrirAuditoria() {
+  document.getElementById('audit-modal').hidden = false;
+  cargarAuditoria();
+}
+
+function cerrarAuditoria() {
+  const modal = document.getElementById('audit-modal');
+  if (modal) modal.hidden = true;
+}
+
+document.getElementById('btn-audit').addEventListener('click', abrirAuditoria);
+document.getElementById('btn-close-audit').addEventListener('click', cerrarAuditoria);
+document.getElementById('btn-refresh-audit').addEventListener('click', cargarAuditoria);
 
 // ---------- Arranque ----------
 

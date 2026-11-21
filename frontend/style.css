@@ -332,6 +332,8 @@ body {
     border-radius: 12px; overflow: hidden;
     box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
 }
+.modal-card-small { max-width: 500px; }
+.modal-body { padding: 1.25rem; font-size: 0.85rem; line-height: 1.6; color: var(--text-muted); }
 
 .modal-head {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;

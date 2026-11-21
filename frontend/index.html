@@ -43,6 +43,7 @@
                 <span id="conn-status" class="conn-status offline">● Sin conexión</span>
                 <span id="user-chip" class="user-chip"></span>
                 <button id="btn-simulate" class="btn-primary">⚡ Simular Lluvia de Logs</button>
+                <button id="btn-audit" class="btn-ghost" hidden>Auditoría</button>
                 <button id="btn-reset" class="btn-ghost" hidden>Reiniciar demo</button>
                 <button id="btn-logout" class="btn-ghost" title="Cerrar sesión">Salir</button>
             </div>
@@ -181,6 +182,55 @@
                         <button id="btn-newer" class="btn-ghost btn-small" disabled>Recientes</button>
                         <button id="btn-older" class="btn-ghost btn-small" disabled>Anteriores</button>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CONFIRMACIÓN -->
+        <div id="confirm-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
+            <div class="modal-card modal-card-small">
+                <div class="modal-head">
+                    <h2 id="confirm-title">Confirmar acción</h2>
+                    <button id="confirm-close" class="btn-ghost" aria-label="Cerrar">✕</button>
+                </div>
+                <div class="modal-body">
+                    <p id="confirm-message"></p>
+                </div>
+                <div class="modal-foot">
+                    <button id="confirm-cancel" class="btn-ghost">Cancelar</button>
+                    <button id="confirm-ok" class="btn-primary">Confirmar</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- AUDITORÍA -->
+        <div id="audit-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title" hidden>
+            <div class="modal-card">
+                <div class="modal-head">
+                    <div>
+                        <h2 id="audit-title">Auditoría</h2>
+                        <p class="modal-sub">Últimas acciones de esta organización</p>
+                    </div>
+                    <button id="btn-close-audit" class="btn-ghost" aria-label="Cerrar">✕</button>
+                </div>
+                <div class="log-table-wrap">
+                    <table class="log-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Usuario</th>
+                                <th>Acción</th>
+                                <th>Detalle</th>
+                                <th>IP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-table-body"></tbody>
+                    </table>
+                    <div id="audit-empty" class="empty-state" hidden>Sin acciones registradas.</div>
+                </div>
+                <div class="modal-foot">
+                    <span id="audit-count" class="muted"></span>
+                    <button id="btn-refresh-audit" class="btn-ghost btn-small">Actualizar</button>
                 </div>
             </div>
         </div>
