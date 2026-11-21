@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC-IA | Centro de Operaciones</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- BARRA SUPERIOR (SALUD DEL SISTEMA) -->
+    <header class="topbar">
+        <div class="logo">🛡️ SOC-IA <span class="version">v2.0</span></div>
+        <div class="health-container">
+            <span>Salud del Sistema:</span>
+            <div class="health-bar-bg">
+                <div id="health-bar" class="health-bar" style="width: 100%;"></div>
+            </div>
+            <span id="health-text">100%</span>
+        </div>
+        <div class="topbar-actions">
+            <span id="conn-status" class="conn-status offline">● Sin conexión</span>
+            <button id="btn-simulate" class="btn-primary">⚡ Simular Lluvia de Logs</button>
+        </div>
+    </header>
+
+    <!-- CONTENIDO PRINCIPAL (3 PANELES) -->
+    <main class="dashboard-grid">
+        <!-- PANEL IZQUIERDO: AGENTES -->
+        <aside class="panel agents-panel">
+            <h2>🤖 Flota de Agentes</h2>
+            <div id="agent-list" class="agent-list">
+                <!-- Se llena con JS -->
+            </div>
+        </aside>
+
+        <!-- PANEL CENTRAL: LLUVIA DE LOGS -->
+        <section class="panel logs-panel">
+            <h2>📡 Lluvia de Logs en Vivo</h2>
+            <div id="logs-console" class="console">
+                <div class="log-line system">> Esperando conexión...</div>
+            </div>
+        </section>
+
+        <!-- PANEL DERECHO: CASOS ESCALADOS -->
+        <aside class="panel cases-panel">
+            <h2>🚨 Casos Escalados</h2>
+            <div id="cases-list" class="cases-list">
+                <!-- Se llena con JS -->
+            </div>
+        </aside>
+    </main>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
