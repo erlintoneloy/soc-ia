@@ -108,7 +108,8 @@ function formatearLog(log) {
 }
 
 function claseLogServidor(log) {
-  if (log.resultado === 'duplicado') return 'system';
+  if (log.resultado === 'duplicado' || log.resultado === 'observado') return 'system';
+  if (log.resultado === 'bloqueado') return 'blocked';
   if (log.resultado === 'escalado') {
     return log.tipo_evento === 'powershell_encoded' ? 'danger' : 'warning';
   }
@@ -448,15 +449,15 @@ async function resolverCaso(id, nuevoEstado, boton) {
 // ---------- Simulador de demo ----------
 
 const LOTE_DEMO = [
-  {
+  ...Array.from({ length: 8 }, () => ({
     fuente: 'identidad',
     tipo_evento: 'login_fallido',
     usuario: 'jefe.finanzas',
     host: 'WS-FAC-05',
     destino_ip: '10.20.50.5',
     ip_origen: '198.51.100.23',
-    intentos: 15,
-  },
+    intentos: 1,
+  })),
   {
     fuente: 'endpoint',
     tipo_evento: 'powershell_encoded',
@@ -494,9 +495,10 @@ document.getElementById('btn-simulate').addEventListener('click', async (evento)
       body: JSON.stringify({ logs: LOTE_DEMO }),
     });
 
-    const { procesados, casos_creados, duplicados, descartados } = json.data;
+    const { procesados, casos_creados, duplicados, descartados, observados, bloqueados } = json.data;
+    const filtrados = (descartados || 0) + (observados || 0) + (bloqueados || 0);
     mostrarAviso(
-      `Lote enviado: ${procesados} procesados, ${casos_creados} casos nuevos, ${duplicados} duplicados, ${descartados} filtrados.`,
+      `Lote enviado: ${procesados} procesados, ${casos_creados} casos nuevos, ${duplicados} duplicados, ${filtrados} filtrados.`,
       'success'
     );
 

@@ -138,6 +138,7 @@ body {
 .log-line { margin-bottom: 0.3rem; color: var(--success); }
 .log-line.warning { color: var(--warning); }
 .log-line.danger { color: var(--danger); }
+.log-line.blocked { color: #38bdf8; }
 .log-line.system { color: var(--text-muted); }
 
 /* CASOS */
@@ -367,8 +368,10 @@ body {
     border-radius: 4px; text-transform: uppercase; letter-spacing: 0.4px;
 }
 .result-badge.escalado { background-color: rgba(249, 115, 22, 0.15); color: var(--warning); }
+.result-badge.observado { background-color: rgba(148, 163, 184, 0.14); color: #94a3b8; }
 .result-badge.descartado { background-color: rgba(34, 197, 94, 0.12); color: var(--success); }
 .result-badge.duplicado { background-color: rgba(156, 163, 175, 0.12); color: var(--text-muted); }
+.result-badge.bloqueado { background-color: rgba(56, 189, 248, 0.12); color: #38bdf8; }
 
 .modal-foot {
     display: flex; align-items: center; justify-content: space-between; gap: 1rem;
