@@ -19,9 +19,9 @@ O con los scripts del `package.json`:
 npm run db:init
 ```
 
-> `seed.sql` inserta los 3 agentes y **no es idempotente**. Si ya lo aplicaste,
-> la segunda ejecución falla con `UNIQUE constraint failed`. En ese caso usa
-> `npm run db:reset` y vuelve a ejecutar `npm run db:init`.
+> `seed.sql` es idempotente (`INSERT OR IGNORE`), así que `npm run db:init` se
+> puede repetir sin errores. El Worker además autorrepara las filas de
+> `agentes_estado` si faltan.
 
 ## 2. Levantar el Worker
 
@@ -50,13 +50,37 @@ El test verifica:
 | Prueba | Endpoint |
 |---|---|
 | Health check con D1 conectada | `GET /api/health` |
-| Log de ruido descartado sin escalar | `POST /api/stream` |
-| Fuerza bruta escalada y caso creado | `POST /api/stream` + `GET /api/dashboard` |
-| Contrato del dashboard y rango de salud | `GET /api/dashboard` |
-| Resolución del caso por el analista | `PATCH /api/cases/:id` |
+| Log de ruido descartado y métricas del agente actualizadas | `POST /api/stream` |
+| Fuerza bruta escalada como `alta`, agente en `alerta` | `POST /api/stream` + `GET /api/dashboard` |
+| PowerShell ofuscado escalado como `critica` | `POST /api/stream` |
+| Salud según `100 - 20·críticas - 10·altas` | `GET /api/dashboard` |
+| Resolución del caso con `nuevo_estado` y `salud_sistema` | `PATCH /api/cases/:id` |
+| Estado de resolución inválido → 400 `VALIDACION` | `PATCH /api/cases/:id` |
+| Caso inexistente → 404 `NO_ENCONTRADO` | `PATCH /api/cases/:id` |
+| Ruta de API desconocida → 404 JSON | `GET /api/ruta-inexistente` |
+| Lote con logs inválidos → 400 `VALIDACION` | `POST /api/stream` |
 
 Cada corrida usa un `RUN_ID` aleatorio para no chocar con casos previos y
-marca su caso como `falso_positivo` al finalizar.
+marca sus casos como `falso_positivo` al finalizar.
+
+### Contrato de errores
+
+Todas las respuestas de error respetan la misma forma:
+
+```json
+{ "ok": false, "error": "descripción legible", "code": "VALIDACION" }
+```
+
+| Código | HTTP | Cuándo |
+|---|---|---|
+| `JSON_INVALIDO` | 400 | El cuerpo no es JSON válido |
+| `VALIDACION` | 400 | Campo inválido, lote vacío, estado no permitido |
+| `NO_ENCONTRADO` | 404 | Ruta de API o caso inexistente |
+| `ERROR_INTERNO` | 500 | Fallo no controlado |
+
+Para rutas que no son de API, el Worker responde una página HTML 404 con el
+tema del SOC. En Cloudflare Pages, `frontend/404.html` cumple la misma función
+para el sitio estático.
 
 Si el Worker no está arriba, el test aborta con un mensaje que indica cómo
 levantarlo.
