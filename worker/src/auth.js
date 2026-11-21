@@ -6,6 +6,8 @@
  * - Rate limit: 5 fallos por IP+email durante 15 minutos.
  */
 
+import { registrarAuditoria } from './auditoria.js';
+
 export const NOMBRE_COOKIE = 'soc_sid';
 export const ITERACIONES_DEFECTO = 100000;
 
@@ -255,6 +257,16 @@ export async function manejarLogin(request, env, json, error) {
 
   await env.DB.prepare(`UPDATE usuarios SET ultimo_acceso = ? WHERE id = ?`).bind(ahora, usuario.id).run();
 
+  await registrarAuditoria(env, {
+    tenantId: usuario.tenant_id,
+    usuarioId: usuario.id,
+    email: usuario.email,
+    rol: usuario.rol,
+    accion: 'login',
+    detalle: { tenant: usuario.tenant_nombre },
+    request,
+  });
+
   const respuesta = json({
     ok: true,
     data: {
@@ -273,8 +285,20 @@ export async function manejarLogin(request, env, json, error) {
   return respuesta;
 }
 
-export async function manejarLogout(request, env, json) {
+export async function manejarLogout(request, env, json, usuario) {
   await cerrarSesion(env, request);
+
+  if (usuario) {
+    await registrarAuditoria(env, {
+      tenantId: usuario.tenant_id,
+      usuarioId: usuario.id,
+      email: usuario.email,
+      rol: usuario.rol,
+      accion: 'logout',
+      request,
+    });
+  }
+
   const respuesta = json({ ok: true, data: { cerrada: true } });
   respuesta.headers.set('Set-Cookie', borrarCookieSesion(esHttps(request)));
   return respuesta;

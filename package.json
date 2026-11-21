@@ -23,7 +23,9 @@
     "db:migrate:logs": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0005-logs.sql",
     "db:migrate:logs:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0005-logs.sql",
     "db:migrate:tenant": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0006-multitenant.sql",
-    "db:migrate:tenant:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0006-multitenant.sql"
+    "db:migrate:tenant:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0006-multitenant.sql",
+    "db:migrate:auditoria": "wrangler d1 execute soc-ia-db --local --file=worker/migrations/0007-auditoria-tokens.sql",
+    "db:migrate:auditoria:remote": "wrangler d1 execute soc-ia-db --remote --yes --file=worker/migrations/0007-auditoria-tokens.sql"
   },
   "devDependencies": {
     "wrangler": "^4.166.0"

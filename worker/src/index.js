@@ -1,4 +1,5 @@
 import { manejarLogin, manejarLogout, usuarioDesdeRequest } from './auth.js';
+import { registrarAuditoria } from './auditoria.js';
 import {
   AGENTE_POR_FUENTE,
   RESULTADOS,
@@ -323,10 +324,10 @@ function nuevaFilaLog(log, resultado, activoId, timestamp, tenantId) {
   };
 }
 
-async function manejarStream(request, env, usuario) {
-  const tenantId = usuario.tenant_id;
+async function manejarStream(request, env, contexto) {
+  const tenantId = contexto.tenantId;
 
-  const limite = await consumirLimite(env, `stream|${usuario.id}`, MAX_STREAM_POR_MINUTO, 60 * 1000);
+  const limite = await consumirLimite(env, contexto.rateKey, MAX_STREAM_POR_MINUTO, 60 * 1000);
   if (!limite.permitido) {
     return error(429, 'Demasiadas peticiones. Esperá un minuto antes de reintentar.', 'DEMASIADAS_PETICIONES');
   }
@@ -615,18 +616,28 @@ async function manejarStream(request, env, usuario) {
     ).run();
   }
 
-  return json({
-    ok: true,
-    data: {
-      procesados: body.logs.length,
-      escalados: body.logs.length - descartados - observados - bloqueados,
-      descartados,
-      observados,
-      bloqueados,
-      casos_creados: casos.length,
-      duplicados,
-    },
-  });
+  const data = {
+    procesados: body.logs.length,
+    escalados: body.logs.length - descartados - observados - bloqueados,
+    descartados,
+    observados,
+    bloqueados,
+    casos_creados: casos.length,
+    duplicados,
+  };
+
+  if (contexto.token) {
+    await registrarAuditoria(env, {
+      tenantId,
+      email: `token:${contexto.token.nombre}`,
+      rol: 'simulador',
+      accion: 'simulacion',
+      detalle: { token: contexto.token.nombre, ...data },
+      request,
+    });
+  }
+
+  return json({ ok: true, data });
 }
 
 const FUENTES_VALIDAS = new Set(Object.keys(AGENTE_POR_FUENTE));
@@ -768,7 +779,8 @@ async function manejarLogs(env, url, tenantId) {
   });
 }
 
-async function manejarResetDemo(env, tenantId) {
+async function manejarResetDemo(request, env, usuario) {
+  const tenantId = usuario.tenant_id;
   const borrado = await env.DB.prepare(`DELETE FROM casos WHERE tenant_id = ?`).bind(tenantId).run();
   const ahora = new Date().toISOString();
 
@@ -787,6 +799,16 @@ async function manejarResetDemo(env, tenantId) {
     env.DB.prepare(`DELETE FROM rate_limit`),
     env.DB.prepare(`DELETE FROM logs WHERE tenant_id = ?`).bind(tenantId),
   ]);
+
+  await registrarAuditoria(env, {
+    tenantId,
+    usuarioId: usuario.id,
+    email: usuario.email,
+    rol: usuario.rol,
+    accion: 'reset',
+    detalle: { casos_eliminados: borrado.meta?.changes ?? 0 },
+    request,
+  });
 
   return json({
     ok: true,
@@ -923,7 +945,8 @@ async function manejarDashboard(env, tenantId) {
   });
 }
 
-async function manejarResolucionCaso(request, env, id, tenantId) {
+async function manejarResolucionCaso(request, env, id, usuario) {
+  const tenantId = usuario.tenant_id;
   let body;
   try {
     body = await request.json();
@@ -952,7 +975,199 @@ async function manejarResolucionCaso(request, env, id, tenantId) {
 
   const salud = await recalcularSalud(env, tenantId);
 
+  await registrarAuditoria(env, {
+    tenantId,
+    usuarioId: usuario.id,
+    email: usuario.email,
+    rol: usuario.rol,
+    accion: 'triage',
+    detalle: { caso: id, estado: nuevoEstado },
+    request,
+  });
+
   return json({ ok: true, data: { nuevo_estado: nuevoEstado, salud_sistema: salud } });
+}
+
+// ---------- Auditoría ----------
+
+async function manejarAuditoria(env, url, tenantId) {
+  const limiteRaw = Number(url.searchParams.get('limit'));
+  const limite = Math.min(200, Math.max(1, Number.isFinite(limiteRaw) && limiteRaw > 0 ? Math.floor(limiteRaw) : 100));
+  const accion = (url.searchParams.get('accion') || '').trim().slice(0, 40);
+
+  const condiciones = ['tenant_id = ?'];
+  const valores = [tenantId];
+
+  if (accion) {
+    condiciones.push('accion = ?');
+    valores.push(accion);
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, usuario_email, rol, accion, detalle_json, ip, creado_en
+       FROM auditoria
+      WHERE ${condiciones.join(' AND ')}
+      ORDER BY creado_en DESC
+      LIMIT ?`
+  )
+    .bind(...valores, limite)
+    .all();
+
+  const auditoria = results.map(({ detalle_json, ...fila }) => {
+    let detalle = null;
+    if (detalle_json) {
+      try {
+        detalle = JSON.parse(detalle_json);
+      } catch {
+        detalle = null;
+      }
+    }
+    return { ...fila, detalle };
+  });
+
+  return json({ ok: true, data: { auditoria } });
+}
+
+// ---------- Tokens de simulación ----------
+
+const CORS_SIMULACION = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+};
+
+function conCorsSimulacion(response) {
+  const headers = new Headers(response.headers);
+  for (const [clave, valor] of Object.entries(CORS_SIMULACION)) headers.set(clave, valor);
+  return new Response(response.body, { status: response.status, headers });
+}
+
+async function hashSha256(texto) {
+  const bits = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(texto));
+  return Array.from(new Uint8Array(bits), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function tokenAleatorio() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binario = '';
+  for (const byte of bytes) binario += String.fromCharCode(byte);
+  return `socsim_${btoa(binario).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')}`;
+}
+
+async function manejarCrearToken(request, env, usuario) {
+  if (usuario.rol !== 'admin') {
+    return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return error(400, 'El cuerpo debe ser JSON válido', 'JSON_INVALIDO');
+  }
+
+  const nombre = typeof body?.nombre === 'string' ? body.nombre.trim().slice(0, 60) : '';
+  if (!nombre) return error(400, 'El nombre del token es obligatorio', 'VALIDACION');
+
+  const token = tokenAleatorio();
+  const id = crypto.randomUUID();
+  const ahora = new Date().toISOString();
+
+  await env.DB.prepare(
+    `INSERT INTO tokens_simulacion (id, tenant_id, nombre, hash, activo, creado_por, creado_en)
+     VALUES (?, ?, ?, ?, 1, ?, ?)`
+  )
+    .bind(id, usuario.tenant_id, nombre, await hashSha256(token), usuario.email, ahora)
+    .run();
+
+  await registrarAuditoria(env, {
+    tenantId: usuario.tenant_id,
+    usuarioId: usuario.id,
+    email: usuario.email,
+    rol: usuario.rol,
+    accion: 'token_creado',
+    detalle: { tokenId: id, nombre },
+    request,
+  });
+
+  return json({ ok: true, data: { id, nombre, token } });
+}
+
+async function manejarListarTokens(env, usuario) {
+  if (usuario.rol !== 'admin') {
+    return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, nombre, activo, creado_por, creado_en, ultimo_uso
+       FROM tokens_simulacion
+      WHERE tenant_id = ?
+      ORDER BY creado_en DESC`
+  )
+    .bind(usuario.tenant_id)
+    .all();
+
+  return json({ ok: true, data: { tokens: results } });
+}
+
+async function manejarRevocarToken(request, env, usuario, id) {
+  if (usuario.rol !== 'admin') {
+    return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
+  }
+
+  const resultado = await env.DB.prepare(
+    `UPDATE tokens_simulacion SET activo = 0 WHERE id = ? AND tenant_id = ?`
+  )
+    .bind(id, usuario.tenant_id)
+    .run();
+
+  if (!resultado.meta || resultado.meta.changes === 0) {
+    return error(404, 'Token no encontrado', 'NO_ENCONTRADO');
+  }
+
+  await registrarAuditoria(env, {
+    tenantId: usuario.tenant_id,
+    usuarioId: usuario.id,
+    email: usuario.email,
+    rol: usuario.rol,
+    accion: 'token_revocado',
+    detalle: { tokenId: id },
+    request,
+  });
+
+  return json({ ok: true, data: { revocado: true } });
+}
+
+async function manejarSimulacion(request, env) {
+  const cabecera = request.headers.get('Authorization') || '';
+  const token = cabecera.startsWith('Bearer ') ? cabecera.slice(7).trim() : '';
+
+  if (!token) {
+    return conCorsSimulacion(error(401, 'Falta el token de simulación', 'TOKEN_INVALIDO'));
+  }
+
+  const hash = await hashSha256(token);
+  const fila = await env.DB.prepare(
+    `SELECT id, nombre, tenant_id FROM tokens_simulacion WHERE hash = ? AND activo = 1`
+  )
+    .bind(hash)
+    .first();
+
+  if (!fila) {
+    return conCorsSimulacion(error(401, 'Token inválido o revocado', 'TOKEN_INVALIDO'));
+  }
+
+  await env.DB.prepare(`UPDATE tokens_simulacion SET ultimo_uso = ? WHERE id = ?`)
+    .bind(new Date().toISOString(), fila.id)
+    .run();
+
+  const respuesta = await manejarStream(request, env, {
+    tenantId: fila.tenant_id,
+    rateKey: `simulate|${fila.id}`,
+    token: { id: fila.id, nombre: fila.nombre },
+  });
+
+  return conCorsSimulacion(respuesta);
 }
 
 export default {
@@ -992,6 +1207,14 @@ export default {
         return await manejarLogin(request, env, json, error);
       }
 
+      // Simulación máquina-a-máquina con token (para la consola de ataque).
+      if (url.pathname === '/api/simulate' && method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: CORS_SIMULACION });
+      }
+      if (url.pathname === '/api/simulate' && method === 'POST') {
+        return await manejarSimulacion(request, env);
+      }
+
       // Todo lo demás exige sesión.
       const usuario = await usuarioDesdeRequest(request, env);
       if (!usuario) return error(401, 'Sesión requerida', 'NO_AUTENTICADO');
@@ -1016,18 +1239,42 @@ export default {
       }
 
       if (url.pathname === '/api/auth/logout' && method === 'POST') {
-        return await manejarLogout(request, env, json);
+        return await manejarLogout(request, env, json, usuario);
+      }
+
+      if (url.pathname === '/api/auditoria' && method === 'GET') {
+        if (usuario.rol !== 'admin') {
+          return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
+        }
+        return await manejarAuditoria(env, url, usuario.tenant_id);
+      }
+
+      if (url.pathname === '/api/admin/tokens' && method === 'POST') {
+        return await manejarCrearToken(request, env, usuario);
+      }
+
+      if (url.pathname === '/api/admin/tokens' && method === 'GET') {
+        return await manejarListarTokens(env, usuario);
+      }
+
+      if (url.pathname.startsWith('/api/admin/tokens/') && method === 'DELETE') {
+        const id = decodeURIComponent(url.pathname.slice('/api/admin/tokens/'.length));
+        if (!id) return error(400, 'Falta el id del token', 'VALIDACION');
+        return await manejarRevocarToken(request, env, usuario, id);
       }
 
       if (url.pathname === '/api/stream' && method === 'POST') {
-        return await manejarStream(request, env, usuario);
+        return await manejarStream(request, env, {
+          tenantId: usuario.tenant_id,
+          rateKey: `stream|${usuario.id}`,
+        });
       }
 
       if (url.pathname === '/api/demo/reset' && method === 'POST') {
         if (usuario.rol !== 'admin') {
           return error(403, 'Esta acción requiere rol admin', 'PROHIBIDO');
         }
-        return await manejarResetDemo(env, usuario.tenant_id);
+        return await manejarResetDemo(request, env, usuario);
       }
 
       if (url.pathname === '/api/dashboard' && method === 'GET') {
@@ -1047,7 +1294,7 @@ export default {
           return error(429, 'Demasiadas peticiones. Esperá un minuto antes de reintentar.', 'DEMASIADAS_PETICIONES');
         }
 
-        return await manejarResolucionCaso(request, env, id, usuario.tenant_id);
+        return await manejarResolucionCaso(request, env, id, usuario);
       }
 
       return error(404, `Ruta no encontrada: ${method} ${url.pathname}`, 'NO_ENCONTRADO');

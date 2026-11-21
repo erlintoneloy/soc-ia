@@ -129,6 +129,29 @@ CREATE TABLE IF NOT EXISTS rate_limit (
     actualizado_en TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS auditoria (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    usuario_id TEXT,
+    usuario_email TEXT,
+    rol TEXT,
+    accion TEXT NOT NULL,
+    detalle_json TEXT,
+    ip TEXT,
+    creado_en TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tokens_simulacion (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    nombre TEXT NOT NULL,
+    hash TEXT NOT NULL UNIQUE,
+    activo INTEGER NOT NULL DEFAULT 1,
+    creado_por TEXT,
+    creado_en TEXT NOT NULL,
+    ultimo_uso TEXT
+);
+
 -- Índices generales
 CREATE INDEX IF NOT EXISTS idx_logs_fuente ON logs(fuente);
 CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(ip_origen);
@@ -145,3 +168,6 @@ CREATE INDEX IF NOT EXISTS idx_activos_tenant ON activos(tenant_id);
 
 CREATE INDEX IF NOT EXISTS idx_sesiones_usuario ON sesiones(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_sesiones_expira ON sesiones(expira_en);
+
+CREATE INDEX IF NOT EXISTS idx_auditoria_tenant ON auditoria(tenant_id, creado_en);
+CREATE INDEX IF NOT EXISTS idx_tokens_tenant ON tokens_simulacion(tenant_id);
