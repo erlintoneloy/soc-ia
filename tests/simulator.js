@@ -319,7 +319,7 @@ async function main() {
   const { cookie, usuario } = await iniciarSesion(opts.url, opts.email, opts.password);
   console.log(`${paint('green', 'Sesión iniciada como')} ${usuario.nombre} (${usuario.rol})\n`);
 
-  const totals = { procesados: 0, escalados: 0, descartados: 0 };
+  const totals = { procesados: 0, escalados: 0, descartados: 0, casos_creados: 0, duplicados: 0 };
   const startedAt = Date.now();
   const batchSize = opts.rate > 0 ? Math.min(BATCH_SIZE, Math.max(1, Math.ceil(opts.rate))) : BATCH_SIZE;
   let sent = 0;
@@ -337,6 +337,8 @@ async function main() {
     totals.procesados += data.procesados ?? 0;
     totals.escalados += data.escalados ?? 0;
     totals.descartados += data.descartados ?? 0;
+    totals.casos_creados += data.casos_creados ?? 0;
+    totals.duplicados += data.duplicados ?? 0;
 
     if (!opts.quiet) {
       console.log(
@@ -359,6 +361,8 @@ async function main() {
   console.log(`  Enviados     ${sent}`);
   console.log(`  Procesados   ${totals.procesados}`);
   console.log(`  Escalados    ${paint('yellow', String(totals.escalados))}`);
+  console.log(`  Casos nuevos ${paint('yellow', String(totals.casos_creados))}`);
+  console.log(`  Duplicados   ${paint('dim', String(totals.duplicados))}`);
   console.log(`  Descartados  ${paint('green', String(totals.descartados))}`);
   console.log(`  Duración     ${(durationMs / 1000).toFixed(2)}s (${throughput} logs/s)`);
   console.log(paint('cyan', '─'.repeat(58)) + '\n');

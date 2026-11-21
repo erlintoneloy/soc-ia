@@ -58,12 +58,22 @@ npm run sim -- --scenario mixto --logs 20 --rate 10
 - Rate limit: 5 fallos por IP+email → bloqueo de 15 minutos.
 - Todo `/api/*` exige sesión, salvo `/api/health` y el login.
 
+## Protecciones operativas
+
+- **Rate limit de API:** 30 ingresos por minuto por usuario en `POST /api/stream` y 60 en `PATCH /api/cases/:id`.
+- **Deduplicación:** un mismo ataque (`fuente + tipo_evento + IP/usuario/host`) no crea otro caso durante 60 segundos. Se acumula en `ocurrencias` y la tarjeta muestra `×N`.
+- **Tope de IA:** máximo 3 inferencias por lote. El resto de los casos se crea igual, pero con resumen de respaldo, marcado como `respaldo` en la UI.
+- **Reset de demo:** botón visible solo para `admin` (o `POST /api/demo/reset`), que borra los casos, reinicia contadores y deja la salud en 100%.
+
 ## Despliegue
 
 ```powershell
 npm run db:init:remote   # schema + seed en la D1 remota (idempotente)
 npm run deploy           # assets + API en un solo Worker
 ```
+
+> Si la base ya existía antes de la Fase 2, aplicá la migración una sola vez:
+> `npm run db:migrate` (local) o `npm run db:migrate:remote` (remoto).
 
 El proyecto completo está configurado en `wrangler.jsonc` (`main`, `assets`, D1 y AI).
 El código del Worker vive en `worker/` y el frontend en `frontend/`.

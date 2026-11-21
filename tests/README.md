@@ -15,7 +15,8 @@ Crea las tablas (incluidas `usuarios`, `sesiones` e `intentos_login`) y siembra 
 agentes, la salud inicial y los usuarios de demo. Es idempotente (`INSERT OR IGNORE`).
 
 > Si ya tenías un estado local viejo, `npm run db:reset` lo borra y después
-> volvés a ejecutar `npm run db:init`.
+> volvés a ejecutar `npm run db:init`. Si la base existía antes de la Fase 2,
+> aplicá `npm run db:migrate` una sola vez.
 
 ## 2. Levantar el Worker
 
@@ -57,7 +58,9 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Cookie inválida → 401 | `GET /api/auth/me` |
 | Log de ruido descartado y métricas | `POST /api/stream` |
 | Fuerza bruta escalada como `alta` | `POST /api/stream` |
+| El mismo ataque no duplica caso en 60 s | `POST /api/stream` |
 | PowerShell ofuscado como `critica` | `POST /api/stream` |
+| Tope de 3 inferencias por lote con respaldo | `POST /api/stream` |
 | Métricas consistentes para los gráficos | `GET /api/dashboard` |
 | Salud según `100 - 20·críticas - 10·altas` | `GET /api/dashboard` |
 | Resolución con `nuevo_estado` y salud | `PATCH /api/cases/:id` |
@@ -65,6 +68,9 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Caso inexistente → 404 | `PATCH /api/cases/:id` |
 | Ruta de API desconocida → 404 | `GET /api/ruta-inexistente` |
 | Lote con logs inválidos → 400 | `POST /api/stream` |
+| Rate limit de 30 ingesta/min → 429 | `POST /api/stream` |
+| Reset solo para admin → 403 | `POST /api/demo/reset` |
+| Reset deja el SOC en 100% y sin casos | `POST /api/demo/reset` |
 | Logout invalida la sesión | `POST /api/auth/logout` |
 
 Cada corrida usa un `RUN_ID` aleatorio para no chocar con casos previos y
@@ -83,8 +89,10 @@ marca sus casos como `falso_positivo` al finalizar.
 | `CREDENCIALES` | 401 | Email o contraseña incorrectos |
 | `NO_AUTENTICADO` | 401 | Falta la cookie o la sesión expiró |
 | `ORIGEN_INVALIDO` | 403 | El `Origin` no coincide con el host |
+| `PROHIBIDO` | 403 | La acción requiere rol admin |
 | `NO_ENCONTRADO` | 404 | Ruta de API o caso inexistente |
 | `DEMASIADOS_INTENTOS` | 429 | Rate limit de login excedido |
+| `DEMASIADAS_PETICIONES` | 429 | Rate limit de ingesta o triage excedido |
 | `ERROR_INTERNO` | 500 | Fallo no controlado |
 
 Las rutas que no son de API sirven `frontend/404.html` como página de error.
@@ -112,6 +120,9 @@ npm run sim -- --url https://soc-ia.hackaton.workers.dev
 Escenarios disponibles: `mixto`, `ruido`, `fuerza-bruta`, `escaneo`, `powershell`.
 
 Opciones completas: `npm run sim -- --help`.
+
+> Un mismo ataque repetido dentro de 60 segundos no crea casos nuevos: se
+> acumula en `ocurrencias` y el resumen indica cuántos duplicados hubo.
 
 ## 6. Limpiar el estado local
 

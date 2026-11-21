@@ -28,12 +28,18 @@ let casoFuerzaBruta = null;
 /** Cookie de sesión de la corrida. Node `fetch` no guarda cookies automáticamente. */
 let cookie = '';
 
-function actualizarCookie(response) {
+function cookieDe(response) {
   const setCookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
   for (const cabecera of setCookies) {
     const [par] = cabecera.split(';');
-    if (par.startsWith('soc_sid=')) cookie = par;
+    if (par.startsWith('soc_sid=')) return par;
   }
+  return '';
+}
+
+function actualizarCookie(response) {
+  const par = cookieDe(response);
+  if (par) cookie = par;
 }
 
 async function api(path, { timeout = REQUEST_TIMEOUT_MS, headers = {}, cookie: cookieManual, guardarCookie = true, ...options } = {}) {
@@ -60,7 +66,20 @@ async function api(path, { timeout = REQUEST_TIMEOUT_MS, headers = {}, cookie: c
     assert.fail(`Respuesta no JSON en ${path} (HTTP ${response.status}): ${text.slice(0, 300)}`);
   }
 
-  return { status: response.status, json };
+  return { status: response.status, json, cookie: cookieDe(response) };
+}
+
+async function loginComo(email, password) {
+  const { status, json, cookie: nueva } = await api('/api/auth/login', {
+    method: 'POST',
+    cookie: '',
+    guardarCookie: false,
+    body: JSON.stringify({ email, password }),
+  });
+
+  assert.equal(status, 200, `Login falló para ${email}: ${json?.error || 'sin detalle'}`);
+  assert.ok(nueva.startsWith('soc_sid='), 'El login debe devolver la cookie de sesión');
+  return nueva;
 }
 
 async function dashboard() {
@@ -236,7 +255,13 @@ describe('SOC-IA smoke test', () => {
     });
 
     assert.equal(status, 200);
-    assert.deepEqual(json.data, { procesados: 1, escalados: 0, descartados: 1 });
+    assert.deepEqual(json.data, {
+      procesados: 1,
+      escalados: 0,
+      descartados: 1,
+      casos_creados: 0,
+      duplicados: 0,
+    });
 
     const despues = await agente('Identidad');
     assert.equal(despues.logs_procesados, antes.logs_procesados + 1, 'logs_procesados debe subir en 1');
@@ -268,6 +293,36 @@ describe('SOC-IA smoke test', () => {
     casoFuerzaBruta = caso.id;
   });
 
+  it('no duplica casos del mismo ataque dentro del cooldown', async () => {
+    const idsAntes = await idsActivos();
+
+    const log = {
+      fuente: 'identidad',
+      tipo_evento: 'login_fallido',
+      usuario: `smoke_${RUN_ID}`,
+      ip: '10.255.255.2',
+      intentos: 15,
+    };
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({ logs: [log, log] }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.escalados, 2);
+    assert.equal(json.data.casos_creados, 0);
+    assert.equal(json.data.duplicados, 2);
+
+    const idsDespues = await idsActivos();
+    assert.equal(idsDespues.size, idsAntes.size, 'No debe crear casos nuevos');
+
+    const data = await dashboard();
+    const caso = data.casos_activos.find((item) => item.id === casoFuerzaBruta);
+    assert.ok(caso, 'El caso original debe seguir activo');
+    assert.ok(Number(caso.ocurrencias) >= 3, 'Las ocurrencias deben acumularse');
+  });
+
   it('escala PowerShell ofuscado como severidad crítica', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
     const caso = await nuevoCasoDesde(await idsActivos(), {
       fuente: 'endpoint',
@@ -278,6 +333,37 @@ describe('SOC-IA smoke test', () => {
 
     assert.equal(caso.severidad, 'critica');
     assert.equal(caso.agente_responsable, 'Agente Endpoint');
+  });
+
+  it('limita las inferencias por lote y marca el resumen de respaldo', { timeout: 90000 }, async () => {
+    const idsAntes = await idsActivos();
+    const logs = Array.from({ length: 5 }, (_, indice) => ({
+      fuente: 'endpoint',
+      tipo_evento: 'powershell_encoded',
+      host: `WS-CAP-${indice}`,
+      payload: 'powershell.exe -enc SQBFAFgA',
+    }));
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      timeout: 60000,
+      body: JSON.stringify({ logs }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.casos_creados, 5);
+
+    const data = await dashboard();
+    const nuevos = data.casos_activos.filter(
+      (caso) => !idsAntes.has(caso.id) && caso.agente_responsable === 'Agente Endpoint'
+    );
+
+    assert.equal(nuevos.length, 5, 'Deben crearse 5 casos distintos');
+
+    const respaldos = nuevos.filter((caso) => caso.resumen_fuente === 'fallback');
+    assert.ok(respaldos.length >= 2, 'El tope de 3 inferencias debe dejar al menos 2 con respaldo');
+
+    for (const caso of nuevos) casosCreados.push(caso.id);
   });
 
   it('expone métricas consistentes para los gráficos', async () => {
@@ -396,6 +482,61 @@ describe('SOC-IA smoke test', () => {
     assert.equal(json.ok, false);
     assert.equal(json.code, 'VALIDACION');
     assert.match(json.error, /fuente/i);
+  });
+
+  it('aplica rate limit por usuario en la ingesta', { timeout: 120000 }, async () => {
+    const adminCookie = await loginComo('admin@soc-ia.demo', 'AdminSocIA2026!');
+    const log = { fuente: 'red', tipo_evento: 'request_normal', ip: '10.0.0.1' };
+
+    for (let intento = 0; intento < 30; intento++) {
+      const { status } = await api('/api/stream', {
+        method: 'POST',
+        cookie: adminCookie,
+        guardarCookie: false,
+        body: JSON.stringify({ logs: [log] }),
+      });
+      assert.equal(status, 200, `La petición ${intento + 1} debía pasar`);
+    }
+
+    const bloqueado = await api('/api/stream', {
+      method: 'POST',
+      cookie: adminCookie,
+      guardarCookie: false,
+      body: JSON.stringify({ logs: [log] }),
+    });
+
+    assert.equal(bloqueado.status, 429);
+    assert.equal(bloqueado.json.code, 'DEMASIADAS_PETICIONES');
+  });
+
+  it('reserva el reset de demo para administradores', async () => {
+    const { status, json } = await api('/api/demo/reset', { method: 'POST' });
+
+    assert.equal(status, 403);
+    assert.equal(json.code, 'PROHIBIDO');
+  });
+
+  it('reinicia la demo y deja el SOC en verde', async () => {
+    const adminCookie = await loginComo('admin@soc-ia.demo', 'AdminSocIA2026!');
+
+    const reset = await api('/api/demo/reset', {
+      method: 'POST',
+      cookie: adminCookie,
+      guardarCookie: false,
+    });
+
+    assert.equal(reset.status, 200);
+    assert.ok(reset.json.data.casos_eliminados >= 1);
+    assert.equal(reset.json.data.salud_sistema, 100);
+
+    const data = await dashboard();
+    assert.equal(data.salud_sistema, 100);
+    assert.equal(data.casos_activos.length, 0);
+
+    for (const agente of data.agentes) {
+      assert.equal(agente.estado, 'activo');
+      assert.equal(agente.logs_procesados, 0);
+    }
   });
 
   it('invalida la sesión al cerrar sesión', async () => {
