@@ -31,6 +31,8 @@ const MAX_IA_POR_LOTE = 3;
 const MAX_STREAM_POR_MINUTO = 30;
 const MAX_PATCH_POR_MINUTO = 60;
 const COOLDOWN_DEDUPE_MS = 60 * 1000;
+const ESCALA = { baja: 1, media: 2, alta: 3, critica: 4 };
+const CRITICIDAD_POR_DEFECTO = 'media';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -95,6 +97,14 @@ function validarLog(log, indice) {
   if (typeof log.tipo_evento !== 'string' || !log.tipo_evento.trim()) {
     return `logs[${indice}].tipo_evento es obligatorio`;
   }
+
+  for (const campo of ['host', 'destino_ip', 'ip_origen', 'ip', 'usuario']) {
+    if (log[campo] === undefined || log[campo] === null) continue;
+    if (typeof log[campo] !== 'string' || log[campo].length > 120) {
+      return `logs[${indice}].${campo} debe ser un texto de hasta 120 caracteres`;
+    }
+  }
+
   return null;
 }
 
@@ -110,7 +120,7 @@ function evaluarLog(log) {
   };
 }
 
-async function generarResumenIA(env, { titulo, agente, severidad, log }) {
+async function generarResumenIA(env, { titulo, agente, severidad, log, contexto }) {
   const fallback = {
     resumen: `${titulo} detectado por el Agente ${agente}. Requiere revisión manual.`,
     recomendacion: 'Aislar el activo afectado y revisar los logs.',
@@ -129,7 +139,9 @@ async function generarResumenIA(env, { titulo, agente, severidad, log }) {
         },
         {
           role: 'user',
-          content: `Evento: ${titulo} (severidad ${severidad}) detectado por el Agente ${agente}. Datos: ${JSON.stringify(log)}`,
+          content:
+            `Evento: ${titulo} (severidad ${severidad}) detectado por el Agente ${agente}. ` +
+            `Datos: ${JSON.stringify(log)}. ${contexto || ''}`,
         },
       ],
     });
@@ -193,8 +205,9 @@ async function insertarCasos(env, casos) {
   const sentencias = casos.map((caso) =>
     env.DB.prepare(
       `INSERT INTO casos (id, titulo, severidad, agente_responsable, resumen_ia, recomendacion_ia,
-                          estado, creado_en, clave_dedupe, ocurrencias, ultima_ocurrencia, resumen_fuente)
-       VALUES (?, ?, ?, ?, ?, ?, 'escalado', ?, ?, ?, ?, ?)`
+                          estado, creado_en, clave_dedupe, ocurrencias, ultima_ocurrencia, resumen_fuente,
+                          activo_id, tipo_evento, ip_origen, usuario_afectado, evidencia_json)
+       VALUES (?, ?, ?, ?, ?, ?, 'escalado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       caso.id,
       caso.titulo,
@@ -206,7 +219,12 @@ async function insertarCasos(env, casos) {
       caso.clave_dedupe,
       caso.ocurrencias,
       caso.ultima_ocurrencia,
-      caso.resumen_fuente
+      caso.resumen_fuente,
+      caso.activo_id,
+      caso.tipo_evento,
+      caso.ip_origen,
+      caso.usuario_afectado,
+      caso.evidencia_json
     )
   );
 
@@ -248,8 +266,57 @@ async function consumirLimite(env, clave, maximo, ventanaMs) {
 }
 
 function claveDedupe(log) {
-  const actor = log.usuario || log.host || log.ip || 'desconocido';
-  return `${log.fuente}|${log.tipo_evento}|${String(actor).slice(0, 120)}`;
+  const partes = [log.host, log.destino_ip, log.usuario, log.ip_origen || log.ip].filter(Boolean);
+  const actor = partes.length ? partes.join('|') : 'desconocido';
+  return `${log.fuente}|${log.tipo_evento}|${String(actor).slice(0, 200)}`;
+}
+
+function calcularPrioridad(severidad, criticidad) {
+  const puntaje = (ESCALA[severidad] || 2) * (ESCALA[criticidad] || 2);
+  if (puntaje >= 12) return 'P1';
+  if (puntaje >= 6) return 'P2';
+  return 'P3';
+}
+
+async function resolverActivo(env, log, cache) {
+  const host = typeof log.host === 'string' ? log.host.trim() : '';
+  const destino = typeof log.destino_ip === 'string' ? log.destino_ip.trim() : '';
+  if (!host && !destino) return null;
+
+  const clave = `${host.toLowerCase()}|${destino}`;
+  if (cache.has(clave)) return cache.get(clave);
+
+  let activo = null;
+
+  if (host) {
+    activo = await env.DB.prepare(
+      `SELECT * FROM activos WHERE activo = 1 AND lower(hostname) = lower(?) LIMIT 1`
+    )
+      .bind(host)
+      .first();
+  }
+
+  if (!activo && destino) {
+    activo = await env.DB.prepare(`SELECT * FROM activos WHERE activo = 1 AND ip = ? LIMIT 1`)
+      .bind(destino)
+      .first();
+  }
+
+  cache.set(clave, activo);
+  return activo;
+}
+
+function construirEvidencia(log) {
+  const evidencia = {
+    host: log.host ?? null,
+    destino_ip: log.destino_ip ?? null,
+    ip_origen: log.ip_origen ?? log.ip ?? null,
+    usuario: log.usuario ?? null,
+    intentos: log.intentos ?? null,
+    payload: typeof log.payload === 'string' ? log.payload.slice(0, 300) : null,
+  };
+
+  return JSON.stringify(evidencia).slice(0, 500);
 }
 
 async function manejarStream(request, env, usuario) {
@@ -285,6 +352,7 @@ async function manejarStream(request, env, usuario) {
   );
   const casos = [];
   const casosPorClave = new Map();
+  const cacheActivos = new Map();
   const creadoEn = new Date().toISOString();
   let descartados = 0;
   let duplicados = 0;
@@ -334,6 +402,13 @@ async function manejarStream(request, env, usuario) {
       continue;
     }
 
+    const activo = await resolverActivo(env, log, cacheActivos);
+    const contexto = activo
+      ? `Activo ${activo.hostname} (${activo.tipo}, área ${activo.departamento}, servicio ${activo.servicio}, criticidad ${activo.criticidad}, SO ${activo.sistema_operativo}). ` +
+        `Usuario afectado: ${log.usuario || 'no informado'}. Origen: ${log.ip_origen || log.ip || 'desconocido'}.`
+      : `Activo no identificado. Usuario afectado: ${log.usuario || 'no informado'}. ` +
+        `Origen: ${log.ip_origen || log.ip || 'desconocido'}.`;
+
     let resumen;
     let recomendacion;
     let fuente;
@@ -346,6 +421,7 @@ async function manejarStream(request, env, usuario) {
         agente,
         severidad: deteccion.severidad,
         log,
+        contexto,
       }));
     } else {
       resumen = `${deteccion.titulo} detectado por el Agente ${agente}. Requiere revisión manual.`;
@@ -365,6 +441,11 @@ async function manejarStream(request, env, usuario) {
       ocurrencias: 1,
       ultima_ocurrencia: creadoEn,
       resumen_fuente: fuente,
+      activo_id: activo?.id ?? null,
+      tipo_evento: log.tipo_evento,
+      ip_origen: log.ip_origen || log.ip || null,
+      usuario_afectado: log.usuario || null,
+      evidencia_json: construirEvidencia(log),
     };
 
     casos.push(caso);
@@ -435,9 +516,57 @@ async function manejarResetDemo(env) {
 }
 
 async function manejarDashboard(env) {
-  const { results: casos } = await env.DB.prepare(
-    `SELECT * FROM casos WHERE estado IN ${ESTADOS_ACTIVOS} ORDER BY creado_en DESC LIMIT 100`
+  const { results: filasCasos } = await env.DB.prepare(
+    `SELECT c.*,
+            a.hostname AS activo_hostname,
+            a.ip AS activo_ip,
+            a.tipo AS activo_tipo,
+            a.departamento AS activo_departamento,
+            a.responsable AS activo_responsable,
+            a.servicio AS activo_servicio,
+            a.criticidad AS activo_criticidad,
+            a.sistema_operativo AS activo_so
+       FROM casos c
+       LEFT JOIN activos a ON a.id = c.activo_id
+      WHERE c.estado IN ${ESTADOS_ACTIVOS}
+      ORDER BY c.creado_en DESC
+      LIMIT 100`
   ).all();
+
+  const casos = filasCasos.map((fila) => {
+    const {
+      activo_hostname,
+      activo_ip,
+      activo_tipo,
+      activo_departamento,
+      activo_responsable,
+      activo_servicio,
+      activo_criticidad,
+      activo_so,
+      ...caso
+    } = fila;
+
+    const activo = activo_hostname
+      ? {
+          id: caso.activo_id,
+          hostname: activo_hostname,
+          ip: activo_ip,
+          tipo: activo_tipo,
+          departamento: activo_departamento,
+          responsable: activo_responsable,
+          servicio: activo_servicio,
+          criticidad: activo_criticidad,
+          sistema_operativo: activo_so,
+        }
+      : null;
+
+    return {
+      ...caso,
+      activo,
+      prioridad: calcularPrioridad(caso.severidad, activo?.criticidad ?? CRITICIDAD_POR_DEFECTO),
+    };
+  });
+
   const { results: agentes } = await env.DB.prepare(`SELECT * FROM agentes_estado ORDER BY nombre`).all();
   const salud = await env.DB.prepare(`SELECT salud_porcentaje FROM sistema_salud WHERE id = 1`).first();
 

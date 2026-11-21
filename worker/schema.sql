@@ -11,6 +11,20 @@ CREATE TABLE IF NOT EXISTS logs (
     procesado BOOLEAN DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS activos (
+    id TEXT PRIMARY KEY,
+    hostname TEXT NOT NULL UNIQUE,
+    ip TEXT NOT NULL,
+    tipo TEXT,
+    departamento TEXT,
+    responsable TEXT,
+    servicio TEXT,
+    criticidad TEXT NOT NULL CHECK (criticidad IN ('baja', 'media', 'alta', 'critica')),
+    sistema_operativo TEXT,
+    activo INTEGER NOT NULL DEFAULT 1,
+    creado_en TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS casos (
     id TEXT PRIMARY KEY,
     titulo TEXT NOT NULL,
@@ -22,6 +36,11 @@ CREATE TABLE IF NOT EXISTS casos (
     ocurrencias INTEGER NOT NULL DEFAULT 1,
     ultima_ocurrencia TEXT,
     resumen_fuente TEXT NOT NULL DEFAULT 'ia',
+    activo_id TEXT,
+    tipo_evento TEXT,
+    ip_origen TEXT,
+    usuario_afectado TEXT,
+    evidencia_json TEXT,
     estado TEXT NOT NULL CHECK (estado IN ('escalado', 'en_triaje', 'contenido', 'falso_positivo')),
     creado_en TEXT NOT NULL,
     resuelto_en TEXT
@@ -49,6 +68,8 @@ CREATE INDEX IF NOT EXISTS idx_logs_fuente ON logs(fuente);
 CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(ip_origen);
 CREATE INDEX IF NOT EXISTS idx_casos_estado ON casos(estado);
 CREATE INDEX IF NOT EXISTS idx_casos_dedupe ON casos(clave_dedupe, ultima_ocurrencia);
+CREATE INDEX IF NOT EXISTS idx_casos_activo ON casos(activo_id);
+CREATE INDEX IF NOT EXISTS idx_activos_ip ON activos(ip);
 
 -- Rate limit de la API (ventana fija por minuto)
 CREATE TABLE IF NOT EXISTS rate_limit (
