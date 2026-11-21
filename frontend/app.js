@@ -309,12 +309,19 @@ function actualizarCasos(casos) {
             </div>`
         : '<div class="case-asset desconocido">Activo desconocido</div>';
 
-      const evidencia = [];
-      if (caso.usuario_afectado) evidencia.push(`Usuario: ${caso.usuario_afectado}`);
-      if (caso.ip_origen) evidencia.push(`Origen: ${caso.ip_origen}`);
-      const bloqueEvidencia = evidencia.length
-        ? `<div class="case-evidence">${evidencia.map((item) => escapeHtml(item)).join(' · ')}</div>`
+      const perfil = caso.usuario_perfil;
+      const usuarioTexto = perfil
+        ? `<span class="case-user" title="${escapeHtml(perfil.email || '')}">👤 ${escapeHtml(perfil.nombre)} <span class="case-user-role">(${escapeHtml(perfil.rol || perfil.area || 'usuario')})</span></span>`
+        : caso.usuario_afectado
+          ? `<span class="case-user">👤 ${escapeHtml(caso.usuario_afectado)}</span>`
+          : '';
+      const origenTexto = caso.ip_origen
+        ? `<span class="case-origin">Origen: ${escapeHtml(caso.ip_origen)}</span>`
         : '';
+      const bloqueEvidencia =
+        usuarioTexto || origenTexto
+          ? `<div class="case-evidence">${[usuarioTexto, origenTexto].filter(Boolean).join('<span class="case-sep">·</span>')}</div>`
+          : '';
 
       return `
         <div class="case-card ${caso.severidad === 'critica' ? 'critico' : ''}">
@@ -373,10 +380,39 @@ async function resolverCaso(id, nuevoEstado, boton) {
 // ---------- Simulador de demo ----------
 
 const LOTE_DEMO = [
-  { fuente: 'identidad', tipo_evento: 'login_fallido', usuario: 'demo_svc', intentos: 15 },
-  { fuente: 'endpoint', tipo_evento: 'powershell_encoded', host: 'WS-DEMO', payload: 'powershell -enc aGVsbG8=' },
-  { fuente: 'red', tipo_evento: 'escaneo_puertos', ip: '203.0.113.7', puertos: [22, 80, 443, 3389] },
-  { fuente: 'identidad', tipo_evento: 'login_exitoso', usuario: 'analista_demo' },
+  {
+    fuente: 'identidad',
+    tipo_evento: 'login_fallido',
+    usuario: 'jefe.finanzas',
+    host: 'WS-FAC-05',
+    destino_ip: '10.20.50.5',
+    ip_origen: '198.51.100.23',
+    intentos: 15,
+  },
+  {
+    fuente: 'endpoint',
+    tipo_evento: 'powershell_encoded',
+    usuario: 'admin.ti',
+    host: 'SRV-HIS-01',
+    destino_ip: '10.20.80.11',
+    ip_origen: '203.0.113.50',
+    payload: 'powershell -enc aGVsbG8=',
+  },
+  {
+    fuente: 'red',
+    tipo_evento: 'escaneo_puertos',
+    host: 'FW-PERIMETRO-01',
+    destino_ip: '10.20.80.1',
+    ip_origen: '203.0.113.45',
+    puertos: [22, 80, 443, 3389],
+  },
+  {
+    fuente: 'identidad',
+    tipo_evento: 'login_exitoso',
+    usuario: 'admision.01',
+    host: 'WS-ADM-11',
+    destino_ip: '10.20.40.11',
+  },
 ];
 
 document.getElementById('btn-simulate').addEventListener('click', async (evento) => {
