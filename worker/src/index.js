@@ -334,6 +334,22 @@ function construirEvidencia(log) {
   return JSON.stringify(evidencia).slice(0, 500);
 }
 
+function nuevaFilaLog(log, resultado, activoId, timestamp) {
+  return {
+    id: crypto.randomUUID(),
+    timestamp,
+    fuente: log.fuente,
+    tipo_evento: log.tipo_evento,
+    ip_origen: log.ip_origen || log.ip || null,
+    destino_ip: log.destino_ip || null,
+    host: log.host || null,
+    usuario: log.usuario || null,
+    activo_id: activoId || null,
+    resultado,
+    payload_json: JSON.stringify(log).slice(0, 2000),
+  };
+}
+
 async function manejarStream(request, env, usuario) {
   const limite = await consumirLimite(env, `stream|${usuario.id}`, MAX_STREAM_POR_MINUTO, 60 * 1000);
   if (!limite.permitido) {
@@ -369,6 +385,7 @@ async function manejarStream(request, env, usuario) {
   const casosPorClave = new Map();
   const cacheActivos = new Map();
   const cacheUsuarios = new Map();
+  const filasLog = [];
   const creadoEn = new Date().toISOString();
   let descartados = 0;
   let duplicados = 0;
@@ -383,6 +400,7 @@ async function manejarStream(request, env, usuario) {
     if (!deteccion) {
       contador.bloqueados++;
       descartados++;
+      filasLog.push(nuevaFilaLog(log, 'descartado', null, creadoEn));
       continue;
     }
 
@@ -394,6 +412,7 @@ async function manejarStream(request, env, usuario) {
     if (enLote) {
       enLote.ocurrencias += 1;
       duplicados++;
+      filasLog.push(nuevaFilaLog(log, 'duplicado', null, creadoEn));
       continue;
     }
 
@@ -415,6 +434,7 @@ async function manejarStream(request, env, usuario) {
         .run();
 
       duplicados++;
+      filasLog.push(nuevaFilaLog(log, 'duplicado', null, creadoEn));
       continue;
     }
 
@@ -472,6 +492,7 @@ async function manejarStream(request, env, usuario) {
 
     casos.push(caso);
     casosPorClave.set(clave, caso);
+    filasLog.push(nuevaFilaLog(log, 'escalado', activo?.id ?? null, creadoEn));
   }
 
   // Asegura las filas de agentes y aplica el delta acumulado en una sola transacción.
@@ -494,12 +515,41 @@ async function manejarStream(request, env, usuario) {
     );
   }
 
+  for (const fila of filasLog) {
+    sentencias.push(
+      env.DB.prepare(
+        `INSERT INTO logs (id, timestamp, fuente, tipo_evento, ip_origen, destino_ip, host, usuario,
+                           activo_id, resultado, payload_json, procesado)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+      ).bind(
+        fila.id,
+        fila.timestamp,
+        fila.fuente,
+        fila.tipo_evento,
+        fila.ip_origen,
+        fila.destino_ip,
+        fila.host,
+        fila.usuario,
+        fila.activo_id,
+        fila.resultado,
+        fila.payload_json
+      )
+    );
+  }
+
   for (let i = 0; i < sentencias.length; i += MAX_SENTENCIAS_POR_BATCH) {
     await env.DB.batch(sentencias.slice(i, i + MAX_SENTENCIAS_POR_BATCH));
   }
 
   await insertarCasos(env, casos);
   await recalcularSalud(env, body.logs.length);
+
+  // Retención: borra logs de más de 24 h en una fracción de los requests.
+  if (Math.random() < 0.05) {
+    await env.DB.prepare(
+      `DELETE FROM logs WHERE timestamp < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')`
+    ).run();
+  }
 
   return json({
     ok: true,
@@ -509,6 +559,38 @@ async function manejarStream(request, env, usuario) {
       descartados,
       casos_creados: casos.length,
       duplicados,
+    },
+  });
+}
+
+async function manejarLogs(env, url) {
+  const afterRaw = Number(url.searchParams.get('after') ?? 0);
+  const after = Number.isFinite(afterRaw) && afterRaw > 0 ? Math.floor(afterRaw) : 0;
+
+  const limiteRaw = Number(url.searchParams.get('limit') ?? 50);
+  const limite = Math.min(100, Math.max(1, Number.isFinite(limiteRaw) ? Math.floor(limiteRaw) : 50));
+  const columnas = `rowid AS seq, timestamp, fuente, tipo_evento, host, destino_ip, ip_origen, usuario, resultado, activo_id`;
+
+  const { results } =
+    after > 0
+      ? await env.DB.prepare(
+          `SELECT ${columnas} FROM logs WHERE rowid > ? ORDER BY rowid ASC LIMIT ?`
+        )
+          .bind(after, limite)
+          .all()
+      : await env.DB.prepare(
+          `SELECT * FROM (SELECT ${columnas} FROM logs ORDER BY rowid DESC LIMIT ?) ORDER BY seq ASC`
+        )
+          .bind(limite)
+          .all();
+
+  const logs = results.map((fila) => ({ ...fila, seq: Number(fila.seq) }));
+
+  return json({
+    ok: true,
+    data: {
+      logs,
+      siguiente: logs.length ? logs[logs.length - 1].seq : after,
     },
   });
 }
@@ -529,6 +611,7 @@ async function manejarResetDemo(env) {
     ).bind(ahora),
     env.DB.prepare(`DELETE FROM intentos_login`),
     env.DB.prepare(`DELETE FROM rate_limit`),
+    env.DB.prepare(`DELETE FROM logs`),
   ]);
 
   return json({
@@ -760,6 +843,10 @@ export default {
 
       if (url.pathname === '/api/dashboard' && method === 'GET') {
         return await manejarDashboard(env);
+      }
+
+      if (url.pathname === '/api/logs' && method === 'GET') {
+        return await manejarLogs(env, url);
       }
 
       if (url.pathname.startsWith('/api/cases/') && method === 'PATCH') {

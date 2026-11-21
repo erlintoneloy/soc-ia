@@ -6,7 +6,11 @@ CREATE TABLE IF NOT EXISTS logs (
     fuente TEXT NOT NULL CHECK (fuente IN ('red', 'identidad', 'endpoint')),
     tipo_evento TEXT NOT NULL,
     ip_origen TEXT,
+    destino_ip TEXT,
+    host TEXT,
     usuario TEXT,
+    activo_id TEXT,
+    resultado TEXT,
     payload_json TEXT NOT NULL,
     procesado BOOLEAN DEFAULT 0
 );
@@ -76,6 +80,7 @@ CREATE TABLE IF NOT EXISTS sistema_salud (
 -- Índices para rendimiento de los agentes
 CREATE INDEX IF NOT EXISTS idx_logs_fuente ON logs(fuente);
 CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(ip_origen);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_casos_estado ON casos(estado);
 CREATE INDEX IF NOT EXISTS idx_casos_dedupe ON casos(clave_dedupe, ultima_ocurrencia);
 CREATE INDEX IF NOT EXISTS idx_casos_activo ON casos(activo_id);
