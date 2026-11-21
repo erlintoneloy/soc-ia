@@ -1,8 +1,4 @@
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+import { manejarLogin, manejarLogout, usuarioDesdeRequest } from './auth.js';
 
 const AGENTE_POR_FUENTE = {
   red: 'Red',
@@ -35,7 +31,10 @@ const MAX_SENTENCIAS_POR_BATCH = 50;
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
   });
 }
 
@@ -376,11 +375,24 @@ export default {
     const url = new URL(request.url);
     const method = request.method;
 
-    if (method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    // Con `run_worker_first: ["/api/*"]` solo las rutas de API llegan al Worker.
+    // Este fallback cubre el desarrollo local y rutas no-API directas.
+    if (!url.pathname.startsWith('/api/')) {
+      if (env.ASSETS) return env.ASSETS.fetch(request);
+
+      const aceptaHtml = (request.headers.get('Accept') || '').includes('text/html');
+      if (aceptaHtml) {
+        return new Response(paginaNoEncontrada(url.pathname), {
+          status: 404,
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        });
+      }
+
+      return error(404, `Ruta no encontrada: ${method} ${url.pathname}`, 'NO_ENCONTRADO');
     }
 
     try {
+      // Público: health check y login.
       if (url.pathname === '/api/health' && method === 'GET') {
         return json({
           ok: true,
@@ -389,6 +401,37 @@ export default {
             database: env.DB ? 'D1 Conectada' : 'D1 No conectada',
           },
         });
+      }
+
+      if (url.pathname === '/api/auth/login' && method === 'POST') {
+        return await manejarLogin(request, env, json, error);
+      }
+
+      // Todo lo demás exige sesión.
+      const usuario = await usuarioDesdeRequest(request, env);
+      if (!usuario) return error(401, 'Sesión requerida', 'NO_AUTENTICADO');
+
+      // CSRF: en métodos mutantes el Origin debe coincidir con el host.
+      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+        const origen = request.headers.get('Origin');
+        if (origen) {
+          let hostOrigen = null;
+          try {
+            hostOrigen = new URL(origen).host;
+          } catch {
+            hostOrigen = null;
+          }
+          if (hostOrigen !== url.host) return error(403, 'Origen no permitido', 'ORIGEN_INVALIDO');
+        }
+      }
+
+      if (url.pathname === '/api/auth/me' && method === 'GET') {
+        const { sesionId, ...publico } = usuario;
+        return json({ ok: true, data: { usuario: publico } });
+      }
+
+      if (url.pathname === '/api/auth/logout' && method === 'POST') {
+        return await manejarLogout(request, env, json);
       }
 
       if (url.pathname === '/api/stream' && method === 'POST') {
@@ -403,18 +446,6 @@ export default {
         const id = decodeURIComponent(url.pathname.slice('/api/cases/'.length));
         if (!id) return error(400, 'Falta el id del caso en la ruta', 'VALIDACION');
         return await manejarResolucionCaso(request, env, id);
-      }
-
-      if (url.pathname.startsWith('/api/')) {
-        return error(404, `Ruta no encontrada: ${method} ${url.pathname}`, 'NO_ENCONTRADO');
-      }
-
-      const aceptaHtml = (request.headers.get('Accept') || '').includes('text/html');
-      if (aceptaHtml) {
-        return new Response(paginaNoEncontrada(url.pathname), {
-          status: 404,
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
       }
 
       return error(404, `Ruta no encontrada: ${method} ${url.pathname}`, 'NO_ENCONTRADO');

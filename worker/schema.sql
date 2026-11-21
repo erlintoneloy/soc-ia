@@ -44,3 +44,36 @@ CREATE TABLE IF NOT EXISTS sistema_salud (
 CREATE INDEX IF NOT EXISTS idx_logs_fuente ON logs(fuente);
 CREATE INDEX IF NOT EXISTS idx_logs_ip ON logs(ip_origen);
 CREATE INDEX IF NOT EXISTS idx_casos_estado ON casos(estado);
+
+-- Autenticación
+CREATE TABLE IF NOT EXISTS usuarios (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    nombre TEXT NOT NULL,
+    rol TEXT NOT NULL CHECK (rol IN ('analista', 'admin')),
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    password_iteraciones INTEGER NOT NULL DEFAULT 100000,
+    activo INTEGER NOT NULL DEFAULT 1,
+    creado_en TEXT NOT NULL,
+    ultimo_acceso TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sesiones (
+    id TEXT PRIMARY KEY,
+    usuario_id TEXT NOT NULL REFERENCES usuarios(id),
+    creado_en TEXT NOT NULL,
+    expira_en TEXT NOT NULL,
+    ip TEXT,
+    user_agent TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sesiones_usuario ON sesiones(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_sesiones_expira ON sesiones(expira_en);
+
+CREATE TABLE IF NOT EXISTS intentos_login (
+    clave TEXT PRIMARY KEY,
+    intentos INTEGER NOT NULL DEFAULT 0,
+    bloqueado_hasta TEXT,
+    actualizado_en TEXT NOT NULL
+);
