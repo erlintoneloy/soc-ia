@@ -10,6 +10,9 @@ const ui = {
 const app = {
   usuario: null,
   intervalo: null,
+  logsIntervalo: null,
+  logSeq: 0,
+  cargandoLogs: false,
 };
 
 // ---------- Utilidades ----------
@@ -86,11 +89,56 @@ function agregarLinea(texto, clase = '') {
   consola.scrollTop = consola.scrollHeight;
 }
 
-function claseLog(log) {
-  if (log.tipo_evento === 'powershell_encoded') return 'danger';
-  if (log.tipo_evento === 'escaneo_puertos' || log.tipo_evento === 'login_fallido') return 'warning';
-  if (log.fuente === 'endpoint') return 'system';
+function formatearLog(log) {
+  const hora = new Date(log.timestamp).toLocaleTimeString('es-AR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const destino = log.host || log.destino_ip || 'sin activo';
+  const actor = log.usuario ? ` (${log.usuario})` : '';
+  return `[${hora}] ${String(log.fuente).toUpperCase()} ${log.tipo_evento} ${destino}${actor} → ${log.resultado}`;
+}
+
+function claseLogServidor(log) {
+  if (log.resultado === 'duplicado') return 'system';
+  if (log.resultado === 'escalado') {
+    return log.tipo_evento === 'powershell_encoded' ? 'danger' : 'warning';
+  }
   return '';
+}
+
+function limpiarConsola(mensaje = '> Sin actividad todavía.') {
+  const consola = document.getElementById('logs-console');
+  consola.innerHTML = '';
+  if (!mensaje) return;
+  agregarLinea(mensaje, 'system');
+  consola.lastElementChild.dataset.placeholder = '1';
+}
+
+async function cargarLogs() {
+  if (app.cargandoLogs) return;
+  app.cargandoLogs = true;
+
+  try {
+    const json = await pedirJSON(`/logs?after=${app.logSeq}&limit=100`);
+
+    if (json.data.logs.length > 0) {
+      const placeholder = document.querySelector('#logs-console [data-placeholder="1"]');
+      if (placeholder) placeholder.remove();
+    }
+
+    for (const log of json.data.logs) {
+      agregarLinea(formatearLog(log), claseLogServidor(log));
+      app.logSeq = Math.max(app.logSeq, Number(log.seq) || 0);
+    }
+  } catch (fallo) {
+    if (fallo.status === 401) mostrarLogin('Tu sesión expiró. Volvé a ingresar.');
+    // Los fallos de red se reintentan en el próximo ciclo sin llenar la pantalla de avisos.
+  } finally {
+    app.cargandoLogs = false;
+  }
 }
 
 // ---------- Autenticación ----------
@@ -113,6 +161,12 @@ function mostrarLogin(mensaje = '') {
     clearInterval(app.intervalo);
     app.intervalo = null;
   }
+  if (app.logsIntervalo) {
+    clearInterval(app.logsIntervalo);
+    app.logsIntervalo = null;
+  }
+  app.logSeq = 0;
+  app.cargandoLogs = false;
 
   document.getElementById('app-shell').hidden = true;
   document.getElementById('login-screen').hidden = false;
@@ -137,10 +191,15 @@ async function entrarApp(usuario) {
   dibujarDonut();
   dibujarBarras();
 
+  limpiarConsola();
+  app.logSeq = 0;
+
   await cargarDashboard();
+  await cargarLogs();
 
   if (!app.usuario) return;
   if (!app.intervalo) app.intervalo = setInterval(cargarDashboard, 5000);
+  if (!app.logsIntervalo) app.logsIntervalo = setInterval(cargarLogs, 1500);
 }
 
 async function iniciarSesion() {
@@ -189,10 +248,11 @@ document.getElementById('btn-reset').addEventListener('click', async (evento) =>
 
   try {
     const json = await pedirJSON('/demo/reset', { method: 'POST' });
-    document.getElementById('logs-console').innerHTML =
-      '<div class="log-line system">> Demo reiniciada. Esperando conexión...</div>';
+    app.logSeq = 0;
+    limpiarConsola('> Demo reiniciada. Sin actividad todavía.');
     mostrarAviso(`Demo reiniciada: ${json.data.casos_eliminados} casos eliminados.`, 'success');
     await cargarDashboard();
+    await cargarLogs();
   } catch (fallo) {
     mostrarAviso(`No se pudo reiniciar la demo: ${fallo.message}`);
   } finally {
@@ -418,34 +478,27 @@ const LOTE_DEMO = [
 document.getElementById('btn-simulate').addEventListener('click', async (evento) => {
   const boton = evento.currentTarget;
   boton.disabled = true;
-  agregarLinea('> Iniciando simulación de ataque...', 'system');
+  agregarLinea('> Enviando lote de simulación al SOC...', 'system');
 
-  LOTE_DEMO.forEach((log, indice) => {
-    setTimeout(() => {
-      const marca = new Date().toLocaleTimeString();
-      agregarLinea(`[${marca}] ${log.fuente.toUpperCase()} - ${log.tipo_evento}`, claseLog(log));
-    }, indice * 300);
-  });
+  try {
+    const json = await pedirJSON('/stream', {
+      method: 'POST',
+      body: JSON.stringify({ logs: LOTE_DEMO }),
+    });
 
-  setTimeout(async () => {
-    try {
-      const json = await pedirJSON('/stream', {
-        method: 'POST',
-        body: JSON.stringify({ logs: LOTE_DEMO }),
-      });
+    const { procesados, casos_creados, duplicados, descartados } = json.data;
+    mostrarAviso(
+      `Lote enviado: ${procesados} procesados, ${casos_creados} casos nuevos, ${duplicados} duplicados, ${descartados} filtrados.`,
+      'success'
+    );
 
-      const { procesados, casos_creados, duplicados, descartados } = json.data;
-      mostrarAviso(
-        `Lote enviado: ${procesados} procesados, ${casos_creados} casos nuevos, ${duplicados} duplicados, ${descartados} filtrados.`,
-        'success'
-      );
-      await cargarDashboard();
-    } catch (fallo) {
-      mostrarAviso(`La simulación falló: ${fallo.message}`);
-    } finally {
-      boton.disabled = false;
-    }
-  }, LOTE_DEMO.length * 300 + 300);
+    await cargarDashboard();
+    await cargarLogs();
+  } catch (fallo) {
+    mostrarAviso(`La simulación falló: ${fallo.message}`);
+  } finally {
+    boton.disabled = false;
+  }
 });
 
 // ---------- Gráficos ----------
