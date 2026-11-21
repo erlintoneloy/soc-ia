@@ -26,6 +26,9 @@ const CREDENCIALES = {
   admin: { email: 'admin@soc-ia.demo', password: process.env.SOC_IA_ADMIN_PASSWORD || '' },
 };
 
+// IP de origen única por corrida para que el dedupe no choque entre ejecuciones.
+const IP_FUERZA_BRUTA = `198.51.100.${(parseInt(RUN_ID.slice(0, 2), 16) % 200) + 1}`;
+
 /** Ids de los casos creados por esta corrida, para limpiarlos al final. */
 const casosCreados = [];
 let casoFuerzaBruta = null;
@@ -153,9 +156,18 @@ describe('SOC-IA smoke test', () => {
     if (!CREDENCIALES.analista.password || !CREDENCIALES.admin.password) {
       throw new Error(
         'Faltan SOC_IA_PASSWORD y/o SOC_IA_ADMIN_PASSWORD.\n' +
-          'Copiá .env.example a .env y completá las credenciales de demo antes de correr el suite.'
+          'Copiá tests/.env.example a tests/.env y completá las credenciales de demo antes de correr el suite.'
       );
     }
+
+    // Estado limpio al inicio: evita que casos de corridas anteriores ensucien las aserciones.
+    const adminCookie = await loginComo(CREDENCIALES.admin.email, CREDENCIALES.admin.password);
+    const reset = await api('/api/demo/reset', {
+      method: 'POST',
+      cookie: adminCookie,
+      guardarCookie: false,
+    });
+    assert.equal(reset.status, 200, 'No se pudo limpiar el estado inicial de la demo');
   });
 
   after(async () => {
@@ -295,10 +307,10 @@ describe('SOC-IA smoke test', () => {
     const caso = await nuevoCasoDesde(idsPrevios, {
       fuente: 'identidad',
       tipo_evento: 'login_fallido',
-      usuario: `jefe.finanzas.${RUN_ID}`,
+      usuario: 'jefe.finanzas',
       host: 'WS-FAC-05',
       destino_ip: '10.20.50.5',
-      ip_origen: '198.51.100.23',
+      ip_origen: IP_FUERZA_BRUTA,
       intentos: 15,
     });
 
@@ -309,6 +321,8 @@ describe('SOC-IA smoke test', () => {
     assert.equal(caso.activo.hostname, 'WS-FAC-05');
     assert.equal(caso.activo.departamento, 'Facturación');
     assert.equal(caso.prioridad, 'P2');
+    assert.equal(caso.usuario_perfil.nombre, 'Juan Pérez');
+    assert.equal(caso.usuario_perfil.rol, 'Jefe de Finanzas');
 
     const despues = await agente('Identidad');
     assert.equal(despues.casos_escalados, antes.casos_escalados + 1);
@@ -323,10 +337,10 @@ describe('SOC-IA smoke test', () => {
     const log = {
       fuente: 'identidad',
       tipo_evento: 'login_fallido',
-      usuario: `jefe.finanzas.${RUN_ID}`,
+      usuario: 'jefe.finanzas',
       host: 'WS-FAC-05',
       destino_ip: '10.20.50.5',
-      ip_origen: '198.51.100.23',
+      ip_origen: IP_FUERZA_BRUTA,
       intentos: 15,
     };
 
@@ -355,7 +369,7 @@ describe('SOC-IA smoke test', () => {
       tipo_evento: 'powershell_encoded',
       host: 'SRV-HIS-01',
       destino_ip: '10.20.80.11',
-      usuario: `admin.ti.${RUN_ID}`,
+      usuario: 'admin.ti',
       ip_origen: '203.0.113.50',
       payload: 'powershell.exe -nop -w hidden -enc SQBFAFgA',
     });
@@ -365,6 +379,8 @@ describe('SOC-IA smoke test', () => {
     assert.equal(caso.activo.hostname, 'SRV-HIS-01');
     assert.equal(caso.activo.departamento, 'TI');
     assert.equal(caso.prioridad, 'P1');
+    assert.equal(caso.usuario_perfil.nombre, 'Nicolás Herrera');
+    assert.equal(caso.usuario_perfil.rol, 'Administrador de Sistemas');
   });
 
   it('limita las inferencias por lote y marca el resumen de respaldo', { timeout: 90000 }, async () => {
@@ -408,7 +424,7 @@ describe('SOC-IA smoke test', () => {
           {
             fuente: 'identidad',
             tipo_evento: 'login_fallido',
-            usuario: `guardia.${RUN_ID}`,
+            usuario: 'guardia.turno',
             destino_ip: '10.20.10.13',
             ip_origen: '198.51.100.44',
             intentos: 15,
@@ -423,10 +439,11 @@ describe('SOC-IA smoke test', () => {
     const caso = await nuevoCasoDesdeIds(idsAntes);
     assert.equal(caso.activo.hostname, 'WS-GUARDIA-03');
     assert.equal(caso.activo.departamento, 'Guardia');
+    assert.equal(caso.usuario_perfil.nombre, 'Carla Ríos');
 
     const evidencia = JSON.parse(caso.evidencia_json);
     assert.equal(evidencia.destino_ip, '10.20.10.13');
-    assert.equal(evidencia.usuario, `guardia.${RUN_ID}`);
+    assert.equal(evidencia.usuario, 'guardia.turno');
     assert.ok(caso.evidencia_json.length <= 500, 'La evidencia debe estar acotada');
 
     casosCreados.push(caso.id);
@@ -463,6 +480,7 @@ describe('SOC-IA smoke test', () => {
     const caso = await nuevoCasoDesdeIds(idsAntes);
     assert.equal(caso.activo, null);
     assert.equal(caso.prioridad, 'P2', 'Sin activo se asume criticidad media');
+    assert.equal(caso.usuario_perfil, null, 'Sin usuario en el directorio no hay perfil');
 
     casosCreados.push(caso.id);
   });
@@ -484,14 +502,14 @@ describe('SOC-IA smoke test', () => {
             ...base,
             host: 'WS-LAB-07',
             destino_ip: '10.20.20.7',
-            usuario: `lab.${RUN_ID}`,
+            usuario: 'bioq.lab',
             ip_origen: '203.0.113.61',
           },
           {
             ...base,
             host: 'WS-IMG-02',
             destino_ip: '10.20.30.2',
-            usuario: `img.${RUN_ID}`,
+            usuario: 'tecnico.img',
             ip_origen: '203.0.113.62',
           },
         ],
@@ -511,6 +529,9 @@ describe('SOC-IA smoke test', () => {
       ['WS-IMG-02', 'WS-LAB-07'],
       'Cada activo debe generar su propio caso'
     );
+
+    const perfiles = nuevos.map((caso) => caso.usuario_perfil.nombre).sort();
+    assert.deepEqual(perfiles, ['Lucía Fernández', 'Martín Gómez']);
 
     for (const caso of nuevos) casosCreados.push(caso.id);
   });

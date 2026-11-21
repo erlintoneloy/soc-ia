@@ -78,6 +78,8 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Activo resuelto por IP cuando falta el host | `POST /api/stream` |
 | Activo desconocido con prioridad media | `POST /api/stream` |
 | Un caso por cada activo afectado | `POST /api/stream` |
+| Perfil de usuario incluido en el caso | `GET /api/dashboard` |
+| Usuario fuera del directorio → sin perfil | `POST /api/stream` |
 | Métricas consistentes para los gráficos | `GET /api/dashboard` |
 | Salud según `100 - 20·críticas - 10·altas` | `GET /api/dashboard` |
 | Resolución con `nuevo_estado` y salud | `PATCH /api/cases/:id` |
@@ -91,7 +93,9 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Logout invalida la sesión | `POST /api/auth/logout` |
 
 Cada corrida usa un `RUN_ID` aleatorio para no chocar con casos previos y
-marca sus casos como `falso_positivo` al finalizar.
+marca sus casos como `falso_positivo` al finalizar. Además, el suite **reinicia
+la demo al inicio** (con la cuenta admin) para partir de un estado limpio y
+evitar que datos de corridas anteriores rompan las aserciones.
 
 ### Contrato de errores
 
