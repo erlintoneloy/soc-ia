@@ -86,6 +86,11 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | Persistencia del log con su resultado | `POST /api/stream` + `GET /api/logs` |
 | Cursor incremental de logs | `GET /api/logs` |
 | El reset borra los logs | `POST /api/demo/reset` |
+| Filtros por fuente y resultado | `GET /api/logs?sentido=desc` |
+| Filtros por host, usuario y texto libre | `GET /api/logs` |
+| Paginación hacia atrás sin solaparse | `GET /api/logs?before=` |
+| Exportación CSV filtrada | `GET /api/logs?format=csv` |
+| Filtros inválidos → 400 | `GET /api/logs?fuente=` |
 | Métricas consistentes para los gráficos | `GET /api/dashboard` |
 | Salud según `100 - 20·críticas - 10·altas` | `GET /api/dashboard` |
 | Resolución con `nuevo_estado` y salud | `PATCH /api/cases/:id` |

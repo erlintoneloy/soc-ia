@@ -595,6 +595,63 @@ describe('SOC-IA smoke test', () => {
     assert.ok(pagina.data.siguiente > seq);
   });
 
+  it('filtra el historial por fuente y resultado', async () => {
+    const endpoint = await api('/api/logs?sentido=desc&fuente=endpoint&limit=20');
+    assert.equal(endpoint.status, 200);
+    assert.ok(endpoint.json.data.logs.length > 0, 'Debe haber logs de endpoint');
+    assert.ok(endpoint.json.data.logs.every((log) => log.fuente === 'endpoint'));
+
+    const escalados = await api('/api/logs?sentido=desc&resultado=escalado&limit=20');
+    assert.ok(escalados.json.data.logs.length > 0, 'Debe haber logs escalados');
+    assert.ok(escalados.json.data.logs.every((log) => log.resultado === 'escalado'));
+  });
+
+  it('filtra el historial por host, usuario y texto libre', async () => {
+    const porHost = await api('/api/logs?sentido=desc&host=srv-his&limit=10');
+    assert.ok(porHost.json.data.logs.length > 0);
+    assert.ok(porHost.json.data.logs.every((log) => (log.host || '').toLowerCase().includes('srv-his')));
+
+    const porUsuario = await api('/api/logs?sentido=desc&usuario=admin.ti&limit=10');
+    assert.ok(porUsuario.json.data.logs.length > 0);
+    assert.ok(porUsuario.json.data.logs.every((log) => (log.usuario || '').toLowerCase().includes('admin.ti')));
+
+    const porTexto = await api('/api/logs?sentido=desc&q=powershell&limit=10');
+    assert.ok(porTexto.json.data.logs.length > 0);
+  });
+
+  it('pagina el historial hacia atrás sin solaparse', async () => {
+    const primera = await api('/api/logs?sentido=desc&limit=2');
+    assert.equal(primera.status, 200);
+    assert.equal(primera.json.data.logs.length, 2);
+    assert.ok(primera.json.data.anterior, 'Debe haber un cursor para anteriores');
+
+    const segunda = await api(`/api/logs?sentido=desc&limit=2&before=${primera.json.data.anterior}`);
+    assert.equal(segunda.status, 200);
+    assert.ok(segunda.json.data.logs.length > 0);
+    assert.ok(segunda.json.data.logs.every((log) => log.seq < primera.json.data.anterior));
+  });
+
+  it('exporta los logs filtrados en CSV', async () => {
+    const respuesta = await fetch(`${BASE_URL}/api/logs?format=csv&fuente=red`, {
+      headers: { Cookie: cookie },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+
+    assert.equal(respuesta.status, 200);
+    assert.match(respuesta.headers.get('content-type') || '', /text\/csv/);
+
+    const lineas = (await respuesta.text()).trim().split('\n');
+    assert.match(lineas[0], /^seq,timestamp,fuente/);
+    assert.ok(lineas.length > 1, 'El CSV debe incluir filas');
+    assert.ok(lineas.slice(1).every((linea) => linea.includes(',"red",')));
+  });
+
+  it('rechaza filtros inválidos del explorador', async () => {
+    const { status, json } = await api('/api/logs?fuente=satelite');
+    assert.equal(status, 400);
+    assert.equal(json.code, 'VALIDACION');
+  });
+
   it('expone métricas consistentes para los gráficos', async () => {
     const data = await dashboard();
     const metricas = data.metricas;
