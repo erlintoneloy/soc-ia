@@ -45,7 +45,7 @@ npm run dev                   # dashboard + API en http://127.0.0.1:8787
 Abrir `http://127.0.0.1:8787` e ingresar con las credenciales de demo.
 
 ```powershell
-npm run test:smoke     # 26 pruebas end-to-end (incluye autenticación)
+npm run test:smoke     # 27 pruebas end-to-end (incluye autenticación)
 npm run sim -- --scenario mixto --logs 20 --rate 10
 ```
 
@@ -82,6 +82,17 @@ El inventario simula una organización ficticia (**Clínica Valle Verde**): 18 a
 El seed incluye **9 usuarios ficticios** (`jefe.finanzas`, `bioq.lab`, `admin.ti`, etc.) con nombre, rol, área y equipo asignado. Cada caso se enlaza por `usuario_afectado` y la API devuelve `usuario_perfil`.
 
 La tarjeta muestra `👤 Juan Pérez (Jefe de Finanzas)`, y el prompt de la IA recibe ese perfil para contextualizar la recomendación. Un usuario fuera del directorio se muestra con su identificador y sin perfil.
+
+## Logs y consola en vivo
+
+Cada log ingerido se persiste en D1 con su resultado: `escalado`, `descartado` o `duplicado`.
+
+- La consola se alimenta de `GET /api/logs?after=<seq>&limit=100`, con cursor incremental y polling cada **1,5 s**. Todos los clientes ven los mismos eventos y el historial sobrevive a un refresh.
+- Retención: se borran los logs de más de 24 h en una fracción de los requests.
+- El reset de demo también limpia los logs.
+- `GET /api/logs` exige sesión.
+
+> Se eligió polling con cursor en lugar de SSE porque no requiere Durable Objects ni conexiones largas. La latencia máxima es de 1,5 s, suficiente para la demo; SSE/DO queda como mejora futura.
 
 ## Despliegue
 

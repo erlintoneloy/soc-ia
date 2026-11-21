@@ -66,3 +66,16 @@
 *   **Consecuencias:**
     *   Pros: el caso cuenta a quién afecta y con qué rol; las recomendaciones de la IA son más humanas; la demo web y la de consola producen el mismo contexto; los tests dejan de depender de datos residuales.
     *   Contras: los usuarios son ficticios y estáticos; un username fuera del directorio se muestra sin perfil; el reset inicial del suite borra los casos existentes (aceptable para pruebas y demo, no para producción real).
+
+## ADR-06: Logs persistidos y consola con polling incremental
+*   **Fecha:** 2026-11-21
+*   **Contexto:** La consola de logs era una animación del navegador: el frontend inventaba líneas, enviaba un lote fijo y no quedaba historial. La tabla `logs` existía pero nunca se escribía. Además, dos clientes no veían los mismos eventos y un refresh borraba la consola.
+*   **Decisión:**
+    *   Persistir cada log en D1 con `host`, `destino_ip`, `activo_id`, `usuario`, `resultado` (`escalado`/`descartado`/`duplicado`) y payload truncado a 2.000 caracteres.
+    *   Exponer `GET /api/logs?after=<seq>&limit=100` con cursor por `rowid`; la primera carga devuelve los últimos 50.
+    *   Consumir ese endpoint desde el frontend con polling cada 1,5 s, deduplicando por `seq` y conservando el historial entre recargas.
+    *   Retención de 24 h aplicada en una fracción de los requests y limpieza total en el reset de demo.
+    *   Mantener la consola acotada a 200 líneas en el DOM.
+*   **Consecuencias:**
+    *   Pros: la lluvia es real y compartida; el historial sobrevive a un refresh; el resultado de cada log se ve en color; no requiere Durable Objects ni conexiones largas; el costo es una consulta liviana por cliente cada 1,5 s.
+    *   Contras: no es push real, la latencia puede llegar a 1,5 s; con muchos clientes aumenta el número de lecturas a D1; los logs viejos se borran a las 24 h. SSE con Durable Objects queda como mejora si se necesita tiempo real estricto.
