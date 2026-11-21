@@ -16,7 +16,7 @@
 const { randomUUID } = require('node:crypto');
 
 const DEFAULT_URL = process.env.SOC_IA_URL || 'http://127.0.0.1:8787';
-const SCENARIOS = ['mixto', 'ruido', 'fuerza-bruta', 'escaneo', 'powershell', 'desconocido'];
+const SCENARIOS = ['mixto', 'ruido', 'fuerza-bruta', 'escaneo', 'powershell', 'desconocido', 'flood'];
 const BATCH_SIZE = 25;
 
 const COLORS = {
@@ -197,6 +197,18 @@ function attackLog(scenario, index, runId) {
           payload: 'powershell.exe -enc SQBFAFgA',
         },
       };
+    case 'flood':
+      return {
+        severity: 'baja',
+        log: {
+          fuente: 'red',
+          tipo_evento: 'request_normal',
+          host: 'SRV-WEB-01',
+          destino_ip: '10.20.80.18',
+          ip_origen: '203.0.113.200',
+          bytes: 1500,
+        },
+      };
     default:
       throw new Error(`Escenario sin generador: ${scenario}`);
   }
@@ -243,6 +255,16 @@ function noiseLog(index) {
 }
 
 function buildLogs({ scenario, logs }, runId) {
+  // En mixto >= 8, el lote arranca con una ráfaga real de fuerza bruta que supera el umbral.
+  if (scenario === 'mixto' && logs >= 8) {
+    const lote = [];
+    for (let i = 0; i < 6; i++) lote.push(attackLog('fuerza-bruta', i, runId));
+    lote.push(attackLog('escaneo', 0, runId));
+    lote.push(attackLog('powershell', 0, runId));
+    for (let i = lote.length; i < logs; i++) lote.push(noiseLog(i));
+    return lote;
+  }
+
   const generated = [];
   const attackScenarios = ['fuerza-bruta', 'escaneo', 'powershell'];
 
@@ -378,7 +400,15 @@ async function main() {
   const { cookie, usuario } = await iniciarSesion(opts.url, opts.email, opts.password);
   console.log(`${paint('green', 'Sesión iniciada como')} ${usuario.nombre} (${usuario.rol})\n`);
 
-  const totals = { procesados: 0, escalados: 0, descartados: 0, casos_creados: 0, duplicados: 0 };
+  const totals = {
+    procesados: 0,
+    escalados: 0,
+    descartados: 0,
+    observados: 0,
+    bloqueados: 0,
+    casos_creados: 0,
+    duplicados: 0,
+  };
   const startedAt = Date.now();
   const batchSize = opts.rate > 0 ? Math.min(BATCH_SIZE, Math.max(1, Math.ceil(opts.rate))) : BATCH_SIZE;
   let sent = 0;
@@ -396,6 +426,8 @@ async function main() {
     totals.procesados += data.procesados ?? 0;
     totals.escalados += data.escalados ?? 0;
     totals.descartados += data.descartados ?? 0;
+    totals.observados += data.observados ?? 0;
+    totals.bloqueados += data.bloqueados ?? 0;
     totals.casos_creados += data.casos_creados ?? 0;
     totals.duplicados += data.duplicados ?? 0;
 
@@ -422,6 +454,8 @@ async function main() {
   console.log(`  Escalados    ${paint('yellow', String(totals.escalados))}`);
   console.log(`  Casos nuevos ${paint('yellow', String(totals.casos_creados))}`);
   console.log(`  Duplicados   ${paint('dim', String(totals.duplicados))}`);
+  console.log(`  Observados   ${paint('dim', String(totals.observados))}`);
+  console.log(`  Bloqueados   ${paint('cyan', String(totals.bloqueados))}`);
   console.log(`  Descartados  ${paint('green', String(totals.descartados))}`);
   console.log(`  Duración     ${(durationMs / 1000).toFixed(2)}s (${throughput} logs/s)`);
   console.log(paint('cyan', '─'.repeat(58)) + '\n');

@@ -73,8 +73,10 @@ El suite hace login al inicio y maneja la cookie de sesión manualmente
 | 5 intentos fallidos → 429 | `POST /api/auth/login` |
 | Cookie inválida → 401 | `GET /api/auth/me` |
 | Log de ruido descartado y métricas | `POST /api/stream` |
-| Fuerza bruta escalada como `alta` | `POST /api/stream` |
+| Fuerza bruta por debajo del umbral → observada | `POST /api/stream` |
+| Fuerza bruta al sexto evento de 60 s → caso | `POST /api/stream` |
 | El mismo ataque no duplica caso en 60 s | `POST /api/stream` |
+| Inundación de más de 100 requests → bloqueada | `POST /api/stream` |
 | PowerShell ofuscado como `critica` | `POST /api/stream` |
 | Tope de 3 inferencias por lote con respaldo | `POST /api/stream` |
 | Activo resuelto por IP cuando falta el host | `POST /api/stream` |
@@ -129,7 +131,19 @@ evitar que datos de corridas anteriores rompan las aserciones.
 
 Las rutas que no son de API sirven `frontend/404.html` como página de error.
 
-## 5. Simulador de logs
+## 5. Pruebas unitarias del motor
+
+No necesitan Worker ni D1: prueban las funciones puras de `worker/src/engine.js`.
+
+```powershell
+npm run test:unit
+```
+
+Cubren el reconocimiento de las tres reglas, la prioridad P1/P2/P3, los umbrales
+de las ventanas (6 fallos y 101 requests) y la clave de deduplicación. La misma
+suite corre en GitHub Actions en cada push a `main` y en cada pull request.
+
+## 6. Simulador de logs
 
 El simulador hace login automáticamente con las credenciales de demo antes de
 enviar los lotes. Se pueden cambiar con `--email` y `--password` o con las
@@ -149,14 +163,18 @@ npm run sim -- --scenario mixto --logs 10 --dry-run
 npm run sim -- --url https://soc-ia.hackaton.workers.dev
 ```
 
-Escenarios disponibles: `mixto`, `ruido`, `fuerza-bruta`, `escaneo`, `powershell`.
+Escenarios disponibles: `mixto`, `ruido`, `fuerza-bruta`, `escaneo`, `powershell`, `desconocido`, `flood`.
+
+- `fuerza-bruta` necesita al menos 6 logs para cruzar el umbral; con menos quedan `observado`.
+- `flood` necesita más de 100 logs (`--logs 150`) para que el Agente de Red auto-bloquee.
+- `mixto` con 8 o más logs arranca con 6 fallos de login, un escaneo y un PowerShell.
 
 Opciones completas: `npm run sim -- --help`.
 
 > Un mismo ataque repetido dentro de 60 segundos no crea casos nuevos: se
 > acumula en `ocurrencias` y el resumen indica cuántos duplicados hubo.
 
-## 6. Limpiar el estado local
+## 7. Limpiar el estado local
 
 Detén `npm run dev` antes de borrar el estado (Windows bloquea los archivos):
 

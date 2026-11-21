@@ -309,6 +309,8 @@ describe('SOC-IA smoke test', () => {
       procesados: 1,
       escalados: 0,
       descartados: 1,
+      observados: 0,
+      bloqueados: 0,
       casos_creados: 0,
       duplicados: 0,
     });
@@ -326,20 +328,59 @@ describe('SOC-IA smoke test', () => {
     assert.equal(fila.host, 'WS-ADM-11');
   });
 
-  it('escala una fuerza bruta como severidad alta y deja al agente en alerta', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
+  it('no escala una fuerza bruta por debajo del umbral', async () => {
+    const idsPrevios = await idsActivos();
+    const base = {
+      fuente: 'identidad',
+      tipo_evento: 'login_fallido',
+      usuario: `bajo.${RUN_ID}`,
+      host: 'WS-ADM-11',
+      destino_ip: '10.20.40.11',
+      ip_origen: IP_FUERZA_BRUTA,
+    };
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({ logs: Array.from({ length: 5 }, () => base) }),
+    });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.observados, 5);
+    assert.equal(json.data.escalados, 0);
+    assert.equal(json.data.casos_creados, 0);
+    assert.equal((await idsActivos()).size, idsPrevios.size, 'No debe crear casos');
+  });
+
+  it('escala una fuerza bruta al superar el umbral en 60 s', { timeout: AI_TIMEOUT_MS + 15000 }, async () => {
     const idsPrevios = await idsActivos();
     const antes = await agente('Identidad');
     const seqAntes = await ultimoSeq();
 
-    const caso = await nuevoCasoDesde(idsPrevios, {
+    const base = {
       fuente: 'identidad',
       tipo_evento: 'login_fallido',
       usuario: 'jefe.finanzas',
       host: 'WS-FAC-05',
       destino_ip: '10.20.50.5',
       ip_origen: IP_FUERZA_BRUTA,
-      intentos: 15,
+      intentos: 1,
+    };
+
+    const { status, json } = await api('/api/stream', {
+      method: 'POST',
+      timeout: AI_TIMEOUT_MS,
+      body: JSON.stringify({ logs: Array.from({ length: 6 }, () => base) }),
     });
+
+    assert.equal(status, 200);
+    assert.equal(json.data.procesados, 6);
+    assert.equal(json.data.observados, 5);
+    assert.equal(json.data.escalados, 1);
+    assert.equal(json.data.casos_creados, 1);
+    assert.equal(json.data.duplicados, 0);
+
+    const caso = await nuevoCasoDesdeIds(idsPrevios);
+    casosCreados.push(caso.id);
 
     assert.equal(caso.severidad, 'alta');
     assert.equal(caso.agente_responsable, 'Agente Identidad');
@@ -356,8 +397,11 @@ describe('SOC-IA smoke test', () => {
     assert.equal(despues.estado, 'alerta');
 
     const filas = await logsDesde(seqAntes);
-    const filaEscalada = filas.find((item) => item.resultado === 'escalado' && item.host === 'WS-FAC-05');
-    assert.ok(filaEscalada, 'El log escalado debe persistirse');
+    assert.equal(filas.filter((item) => item.resultado === 'observado').length, 5);
+    const filaEscalada = filas.find(
+      (item) => item.resultado === 'escalado' && item.host === 'WS-FAC-05'
+    );
+    assert.ok(filaEscalada, 'El log que cruza el umbral debe persistirse como escalado');
 
     casoFuerzaBruta = caso.id;
   });
@@ -461,12 +505,12 @@ describe('SOC-IA smoke test', () => {
       body: JSON.stringify({
         logs: [
           {
-            fuente: 'identidad',
-            tipo_evento: 'login_fallido',
+            fuente: 'endpoint',
+            tipo_evento: 'powershell_encoded',
             usuario: 'guardia.turno',
             destino_ip: '10.20.10.13',
             ip_origen: '198.51.100.44',
-            intentos: 15,
+            payload: 'powershell.exe -enc SQBFAFgA',
           },
         ],
       }),
@@ -486,12 +530,6 @@ describe('SOC-IA smoke test', () => {
     assert.ok(caso.evidencia_json.length <= 500, 'La evidencia debe estar acotada');
 
     casosCreados.push(caso.id);
-
-    // Se resuelve para no dejar un caso de Identidad activo antes del triage.
-    await api(`/api/cases/${caso.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ estado: 'falso_positivo' }),
-    });
   });
 
   it('marca como desconocido un activo fuera del inventario', async () => {
@@ -593,6 +631,39 @@ describe('SOC-IA smoke test', () => {
     assert.equal(pagina.data.logs[0].resultado, 'descartado');
     assert.equal(pagina.data.logs[0].host, 'SRV-WEB-01');
     assert.ok(pagina.data.siguiente > seq);
+  });
+
+  it('auto-bloquea una inundación de más de 100 requests del mismo origen', { timeout: 60000 }, async () => {
+    const ip = '203.0.113.210';
+    const base = {
+      fuente: 'red',
+      tipo_evento: 'request_normal',
+      host: 'SRV-WEB-01',
+      destino_ip: '10.20.80.18',
+      ip_origen: ip,
+    };
+
+    const primera = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({ logs: Array.from({ length: 100 }, () => base) }),
+    });
+
+    assert.equal(primera.status, 200);
+    assert.equal(primera.json.data.descartados, 100);
+    assert.equal(primera.json.data.bloqueados, 0);
+
+    const segunda = await api('/api/stream', {
+      method: 'POST',
+      body: JSON.stringify({ logs: [base] }),
+    });
+
+    assert.equal(segunda.status, 200);
+    assert.equal(segunda.json.data.bloqueados, 1);
+    assert.equal(segunda.json.data.casos_creados, 0);
+
+    const filas = await api(`/api/logs?sentido=desc&q=${ip}&limit=1`);
+    assert.equal(filas.status, 200);
+    assert.equal(filas.json.data.logs[0].resultado, 'bloqueado');
   });
 
   it('filtra el historial por fuente y resultado', async () => {
