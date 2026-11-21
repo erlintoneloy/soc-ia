@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  motor:
+    name: Motor de reglas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sintaxis del Worker
+        run: node --check worker/src/index.js && node --check worker/src/engine.js && node --check worker/src/auth.js
+
+      - name: Pruebas unitarias
+        run: npm run test:unit
