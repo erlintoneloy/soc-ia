@@ -31,6 +31,16 @@
             <div id="agent-list" class="agent-list">
                 <!-- Se llena con JS -->
             </div>
+            <div class="panel-chart agent-chart">
+                <div class="chart-head">
+                    <h3>Escalados vs Atendidos</h3>
+                </div>
+                <canvas id="chart-agentes" role="img" aria-label="Casos escalados y atendidos por agente"></canvas>
+                <div class="chart-legend">
+                    <span><i class="dot escalado"></i>Escalados</span>
+                    <span><i class="dot atendido"></i>Atendidos</span>
+                </div>
+            </div>
         </aside>
 
         <!-- PANEL CENTRAL: LLUVIA DE LOGS -->
@@ -38,6 +48,24 @@
             <h2>📡 Lluvia de Logs en Vivo</h2>
             <div id="logs-console" class="console">
                 <div class="log-line system">> Esperando conexión...</div>
+            </div>
+            <div class="monitor-row">
+                <div class="panel-chart ecg-block">
+                    <div class="chart-head">
+                        <h3>Signos vitales del SOC</h3>
+                        <span id="ecg-reading" class="chart-reading">100%</span>
+                    </div>
+                    <canvas id="chart-ecg" role="img" aria-label="Salud del sistema en tiempo real"></canvas>
+                </div>
+                <div class="panel-chart donut-block">
+                    <div class="chart-head">
+                        <h3>Ataques por tipo</h3>
+                    </div>
+                    <div class="donut-wrap">
+                        <canvas id="chart-ataques" role="img" aria-label="Proporción de ataques por tipo"></canvas>
+                        <ul id="donut-legend" class="donut-legend"></ul>
+                    </div>
+                </div>
             </div>
         </section>
 

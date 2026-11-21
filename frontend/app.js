@@ -97,8 +97,9 @@ async function cargarDashboard() {
     ui.avisoRedMostrado = false;
 
     actualizarSalud(json.data.salud_sistema);
-    actualizarAgentes(json.data.agentes);
+    actualizarAgentes(json.data.agentes, json.data.metricas);
     actualizarCasos(json.data.casos_activos);
+    actualizarGraficos(json.data);
   } catch (fallo) {
     marcarConexion(false);
 
@@ -123,9 +124,10 @@ function actualizarSalud(porcentaje) {
   else barra.style.backgroundColor = 'var(--danger)';
 }
 
-function actualizarAgentes(agentes) {
+function actualizarAgentes(agentes, metricas) {
   const contenedor = document.getElementById('agent-list');
   const lista = Array.isArray(agentes) ? agentes : [];
+  const porNombre = new Map(((metricas && metricas.agentes) || []).map((item) => [item.nombre, item]));
 
   if (lista.length === 0) {
     contenedor.innerHTML =
@@ -134,8 +136,10 @@ function actualizarAgentes(agentes) {
   }
 
   contenedor.innerHTML = lista
-    .map(
-      (agente) => `
+    .map((agente) => {
+      const metrica = porNombre.get(agente.nombre) || { escalados: 0, atendidos: 0, activos: 0 };
+
+      return `
         <div class="agent-card ${agente.estado === 'alerta' ? 'alerta' : ''}">
             <div class="agent-title">
                 <h3>Agente ${escapeHtml(agente.nombre)}</h3>
@@ -144,10 +148,11 @@ function actualizarAgentes(agentes) {
             <div class="agent-stats">
                 <div>📥 Procesados: ${Number(agente.logs_procesados) || 0}</div>
                 <div>🛡️ Filtrados: ${Number(agente.logs_bloqueados) || 0}</div>
-                <div>🚨 Escalados: ${Number(agente.casos_escalados) || 0}</div>
+                <div>🚨 Activos: ${metrica.activos}</div>
             </div>
-        </div>`
-    )
+            <div class="agent-sub">Histórico: ${metrica.escalados} escalados · ${metrica.atendidos} atendidos</div>
+        </div>`;
+    })
     .join('');
 }
 
@@ -249,8 +254,304 @@ document.getElementById('btn-simulate').addEventListener('click', async (evento)
   }, LOTE_DEMO.length * 300 + 300);
 });
 
+// ---------- Gráficos ----------
+
+const COLORES_ATAQUES = ['#ef4444', '#f97316', '#eab308', '#0ea5e9', '#a855f7', '#22c55e'];
+const ECG_MUESTRA_MS = 40;
+const ECG_MAX_MUESTRAS = 225;
+const LATIDO = [0, 0, 1, 2, 1, 0, -1, -2, 0, 9, 16, -7, -12, 4, 2, 0, 0, 1, 2, 1, 0, 0, 0, 0];
+
+const graficos = {
+  salud: 100,
+  ataques: [],
+  agentes: [],
+};
+
+const ecg = {
+  ctx: null,
+  ancho: 0,
+  alto: 0,
+  muestras: [],
+  fase: 0,
+  salud: 100,
+  objetivo: 100,
+  acumulado: 0,
+  ultimoFrame: 0,
+};
+
+function ajustarCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const ancho = Math.max(1, Math.round(rect.width));
+  const alto = Math.max(1, Math.round(rect.height));
+
+  canvas.width = Math.round(ancho * dpr);
+  canvas.height = Math.round(alto * dpr);
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  return { ctx, ancho, alto };
+}
+
+function colorSalud(salud) {
+  if (salud > 80) return '#22c55e';
+  if (salud >= 50) return '#f59e0b';
+  return '#ef4444';
+}
+
+function ajustarEcg() {
+  const { ctx, ancho, alto } = ajustarCanvas(document.getElementById('chart-ecg'));
+  ecg.ctx = ctx;
+  ecg.ancho = ancho;
+  ecg.alto = alto;
+}
+
+function prellenarEcg() {
+  ecg.muestras = [];
+  for (let i = 0; i < ECG_MAX_MUESTRAS; i++) {
+    ecg.muestras.push(50 + LATIDO[i % LATIDO.length]);
+  }
+  ecg.fase = ECG_MAX_MUESTRAS % LATIDO.length;
+}
+
+function dibujarEcg() {
+  const { ctx, ancho, alto } = ecg;
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, ancho, alto);
+
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.10)';
+  ctx.lineWidth = 1;
+
+  for (let fila = 1; fila < 4; fila++) {
+    const y = (alto / 4) * fila;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(ancho, y);
+    ctx.stroke();
+  }
+
+  for (let columna = 1; columna < 8; columna++) {
+    const x = (ancho / 8) * columna;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, alto);
+    ctx.stroke();
+  }
+
+  const color = colorSalud(ecg.salud);
+  const paso = ancho / (ECG_MAX_MUESTRAS - 1);
+  const inicio = ECG_MAX_MUESTRAS - ecg.muestras.length;
+
+  if (ecg.muestras.length > 1) {
+    ctx.beginPath();
+    ecg.muestras.forEach((valor, indice) => {
+      const x = (inicio + indice) * paso;
+      const y = alto - (Math.max(0, Math.min(100, valor)) / 100) * alto;
+      if (indice === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.8;
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 9;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  if (ecg.muestras.length > 0) {
+    const ultimo = ecg.muestras[ecg.muestras.length - 1];
+    const y = alto - (Math.max(0, Math.min(100, ultimo)) / 100) * alto;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(ancho - 2, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function bucleEcg(timestamp) {
+  requestAnimationFrame(bucleEcg);
+
+  if (document.hidden) {
+    ecg.ultimoFrame = timestamp;
+    return;
+  }
+
+  if (!ecg.ultimoFrame) ecg.ultimoFrame = timestamp;
+
+  const delta = Math.min(120, timestamp - ecg.ultimoFrame);
+  ecg.ultimoFrame = timestamp;
+  ecg.acumulado += delta;
+
+  while (ecg.acumulado >= ECG_MUESTRA_MS) {
+    ecg.acumulado -= ECG_MUESTRA_MS;
+    ecg.fase = (ecg.fase + 1) % LATIDO.length;
+    ecg.salud += (ecg.objetivo - ecg.salud) * 0.06;
+
+    // Con salud baja el trazo se vuelve errático, como una arritmia.
+    const inestabilidad = Math.max(0, (70 - ecg.salud) / 70);
+    const ruido = (Math.random() - 0.5) * 26 * inestabilidad;
+    const amplitud = 1 + inestabilidad * 1.6;
+
+    ecg.muestras.push(50 + LATIDO[ecg.fase] * amplitud + ruido);
+    if (ecg.muestras.length > ECG_MAX_MUESTRAS) ecg.muestras.shift();
+  }
+
+  dibujarEcg();
+}
+
+function etiquetaAtaque(titulo) {
+  if (/escaneo/i.test(titulo)) return 'Escaneo';
+  if (/fuerza bruta/i.test(titulo)) return 'Fuerza bruta';
+  if (/powershell/i.test(titulo)) return 'PowerShell';
+  return titulo;
+}
+
+function dibujarDonut() {
+  const { ctx, ancho, alto } = ajustarCanvas(document.getElementById('chart-ataques'));
+  const leyenda = document.getElementById('donut-legend');
+  const datos = graficos.ataques;
+  const total = datos.reduce((suma, item) => suma + item.total, 0);
+
+  const cx = ancho / 2;
+  const cy = alto / 2;
+  const radio = Math.max(10, Math.min(ancho, alto) / 2 - 7);
+  const grosor = Math.max(8, radio * 0.34);
+
+  ctx.clearRect(0, 0, ancho, alto);
+  ctx.lineWidth = grosor;
+
+  if (total === 0) {
+    ctx.strokeStyle = '#1f2937';
+    ctx.beginPath();
+    ctx.arc(cx, cy, radio, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    let angulo = -Math.PI / 2;
+    datos.forEach((item, indice) => {
+      const arco = (item.total / total) * Math.PI * 2;
+      ctx.strokeStyle = COLORES_ATAQUES[indice % COLORES_ATAQUES.length];
+      ctx.beginPath();
+      ctx.arc(cx, cy, radio, angulo, angulo + Math.max(0.02, arco - 0.02));
+      ctx.stroke();
+      angulo += arco;
+    });
+  }
+
+  ctx.fillStyle = '#f3f4f6';
+  ctx.font = '700 15px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(total), cx, cy - 4);
+
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '9px Inter, system-ui, sans-serif';
+  ctx.fillText(total === 1 ? 'caso' : 'casos', cx, cy + 10);
+
+  leyenda.innerHTML =
+    datos.length === 0
+      ? '<li>Sin ataques registrados</li>'
+      : datos
+          .slice(0, 4)
+          .map(
+            (item, indice) => `
+              <li>
+                <i class="dot" style="background-color:${COLORES_ATAQUES[indice % COLORES_ATAQUES.length]}"></i>
+                <span>${escapeHtml(etiquetaAtaque(item.titulo))}</span>
+                <b>${item.total}</b>
+              </li>`
+          )
+          .join('');
+}
+
+function dibujarBarras() {
+  const { ctx, ancho, alto } = ajustarCanvas(document.getElementById('chart-agentes'));
+  const datos = graficos.agentes;
+
+  ctx.clearRect(0, 0, ancho, alto);
+
+  const totalEscalados = datos.reduce((suma, item) => suma + item.escalados, 0);
+
+  if (totalEscalados === 0) {
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '11px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Sin casos todavía', ancho / 2, alto / 2);
+    return;
+  }
+
+  const maximo = Math.max(1, ...datos.map((item) => item.escalados));
+  const areaEtiqueta = 52;
+  const areaNumero = 34;
+  const anchoBarra = Math.max(10, ancho - areaEtiqueta - areaNumero);
+  const altoFila = alto / datos.length;
+  const altoBarra = Math.max(4, Math.min(8, altoFila * 0.22));
+  const separacion = 2;
+
+  datos.forEach((item, indice) => {
+    const y = indice * altoFila + (altoFila - (altoBarra * 2 + separacion)) / 2;
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(item.nombre, 0, y + altoBarra);
+
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(areaEtiqueta, y, (item.escalados / maximo) * anchoBarra, altoBarra);
+
+    ctx.fillStyle = '#22c55e';
+    ctx.fillRect(
+      areaEtiqueta,
+      y + altoBarra + separacion,
+      (item.atendidos / maximo) * anchoBarra,
+      altoBarra
+    );
+
+    ctx.fillStyle = '#e5e7eb';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${item.atendidos}/${item.escalados}`, ancho, y + altoBarra);
+  });
+}
+
+function actualizarGraficos(data) {
+  graficos.salud = Math.max(0, Math.min(100, Number(data.salud_sistema) || 0));
+  graficos.ataques = Array.isArray(data.metricas?.ataques_por_tipo) ? data.metricas.ataques_por_tipo : [];
+  graficos.agentes = Array.isArray(data.metricas?.agentes) ? data.metricas.agentes : [];
+
+  ecg.objetivo = graficos.salud;
+
+  const lectura = document.getElementById('ecg-reading');
+  lectura.textContent = `${graficos.salud}%`;
+  lectura.style.color = colorSalud(graficos.salud);
+
+  dibujarDonut();
+  dibujarBarras();
+}
+
 // ---------- Arranque ----------
 
 marcarConexion(false);
+ajustarEcg();
+prellenarEcg();
+dibujarEcg();
+dibujarDonut();
+dibujarBarras();
+requestAnimationFrame(bucleEcg);
+
+let temporizadorResize;
+window.addEventListener('resize', () => {
+  clearTimeout(temporizadorResize);
+  temporizadorResize = setTimeout(() => {
+    ajustarEcg();
+    dibujarDonut();
+    dibujarBarras();
+  }, 150);
+});
+
 cargarDashboard();
-setInterval(cargarDashboard, 10000);
+setInterval(cargarDashboard, 5000);
